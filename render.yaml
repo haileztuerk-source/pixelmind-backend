@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: pixelmind-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: REPLICATE_API_TOKEN
+        sync: false   # you enter this in Render dashboard
+    plan: free
