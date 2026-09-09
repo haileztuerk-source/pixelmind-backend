@@ -28,4 +28,10 @@ services:
         value: "1400"
       - key: ANCHOR_HOUR
         value: "6"      # Tagesanker in UTC, wie TAGES_ANKER_STUNDE im Original
+      # Wachhalten nur waehrend der Handelszeit. Rund um die Uhr wuerde
+      # ein einzelner Dienst die 750 Freistunden des Accounts aufbrauchen.
+      - key: KEEPALIVE_HOURS
+        value: "12-21"  # UTC, deckt Vorboerse bis Abrechnung ab
+      - key: KEEPALIVE_WEEKDAYS
+        value: "1"
     plan: free

@@ -121,6 +121,41 @@ Optional im Dashboard: `GEMINI_API_KEY`. Ohne Key antwortet der Agent aus
 Vorlagen; jede Zahl stammt dann zwingend aus der Engine, keine kann
 erfunden werden.
 
+## Kosten
+
+Alles kostenlos, ohne Karte, ohne Testphase. Was der Dienst anfasst:
+
+| Bestandteil | Kosten | Grenze |
+|---|---|---|
+| Cboe-CDN (Ketten, Intraday) | 0 € | kein Key, kein erkennbares Limit |
+| Yahoo (Historie) | 0 € | drosselt stossweise mit 429, Ausweichkette faengt das |
+| ForexFactory + RSS | 0 € | kein Key |
+| Render Web Service | 0 € | 512 MB RAM, 750 Instanzstunden je Account |
+| Gemini (optional) | 0 € | dauerhaft freies Kontingent, ~1.500 Aufrufe/Tag |
+
+Gemessener Spitzenverbrauch mit allen fuenf Maerkten im Cache: **158 MB**.
+Das passt in die 512 MB des Free-Plans.
+
+### Die Stundenrechnung
+
+750 Instanzstunden gelten fuer den **ganzen Account**, ein Monat hat 744.
+Ein einziger rund um die Uhr wachgehaltener Dienst braucht also alles auf -
+und `pixelmind-backend` im selben Account ginge leer aus.
+
+Deshalb haelt `keepalive.py` den Dienst nur waehrend der Handelszeit wach
+(12-21 Uhr UTC, werktags): rund **198 Stunden im Monat**. Ausserhalb
+schlaeft er und wacht beim ersten Aufruf in etwa 50 Sekunden auf.
+
+### Was kostenlos nicht geht
+
+Der Free-Plan hat **keine persistente Festplatte**. Bei jedem Neustart
+sind Zonenbuch, Chat-Verlauf und Tagesplan weg. Der Pruefungszaehler ueber
+Tage - die Grundlage fuer "siebter Test" - haelt sein Versprechen damit
+nur, solange der Container lebt.
+
+Kostenlos loesbar ueber eine externe Datenbank mit Gratis-Kontingent
+(Neon, Supabase). Das ist eine Codeaenderung, keine Einstellung.
+
 ## Was diese Fassung bewusst nicht kann
 
 - **Kein Entry-Timing.** Der Cboe-Feed haengt gemessene 15 bis 16 Minuten
