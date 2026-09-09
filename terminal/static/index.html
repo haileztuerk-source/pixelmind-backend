@@ -93,9 +93,11 @@ button{font:inherit;color:inherit;background:none;border:none;padding:0;cursor:p
 .cvwrap{position:absolute;inset:0;touch-action:none}
 canvas{display:block;width:100%;height:100%}
 .meta{
-  position:absolute;left:12px;top:10px;font-family:var(--mono);font-size:9.5px;
-  color:var(--ink-faint);line-height:1.6;pointer-events:none;
-  text-shadow:0 1px 3px var(--ground);
+  position:absolute;left:8px;top:8px;font-family:var(--mono);font-size:9.5px;
+  color:var(--ink-dim);line-height:1.55;pointer-events:none;
+  background:color-mix(in srgb, var(--ground) 76%, transparent);
+  border:1px solid var(--line-soft);border-radius:8px;padding:5px 9px;
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
 }
 .tfbar{
   position:absolute;left:10px;right:10px;bottom:10px;display:flex;gap:6px;align-items:center;
@@ -242,6 +244,41 @@ canvas{display:block;width:100%;height:100%}
   font-size:11px;color:var(--ink-faint);font-family:var(--mono);opacity:0;transition:opacity .2s
 }
 .refresh.on{opacity:1}
+
+/* ---------- Tiefe und Rueckmeldung ---------- */
+.card{
+  background:linear-gradient(180deg,var(--panel-2),color-mix(in srgb,var(--panel-2) 88%, #000));
+  box-shadow:0 1px 0 rgba(255,255,255,.03) inset, 0 6px 18px -12px rgba(0,0,0,.8);
+}
+.tile{
+  background:linear-gradient(180deg,var(--panel-2),color-mix(in srgb,var(--panel-2) 90%, #000));
+  box-shadow:0 1px 0 rgba(255,255,255,.03) inset;
+}
+.topbar{box-shadow:0 1px 0 rgba(255,255,255,.02) inset}
+.tabbar{box-shadow:0 -8px 22px -18px rgba(0,0,0,.9)}
+
+/* Druck sichtbar machen - ein Ziel, das nachgibt, fuehlt sich verlaesslich an */
+.tb:active,.mchip:active,.tfc:active,.pill:active,.si:active{transform:scale(.965)}
+.tb,.mchip,.tfc,.si{transition:transform .09s ease, color .15s ease, background .15s ease}
+.card{transition:transform .09s ease}
+.card:active{transform:scale(.99)}
+
+/* Aktiver Reiter bekommt einen Lichtpunkt statt nur Farbe */
+.tb.on::before{
+  content:"";position:absolute;top:5px;width:16px;height:2px;border-radius:2px;
+  background:var(--resist);box-shadow:0 0 8px var(--resist);
+}
+
+/* Ladezustand: Platzhalter in der Form des Inhalts statt "lädt…" */
+.skel{padding:14px 0}
+.skel i{
+  display:block;height:58px;border-radius:13px;margin-bottom:9px;
+  background:linear-gradient(90deg,var(--panel-2) 0%,var(--panel-3) 50%,var(--panel-2) 100%);
+  background-size:200% 100%;animation:shim 1.4s ease-in-out infinite;
+}
+.skel i:nth-child(2){animation-delay:.12s} .skel i:nth-child(3){animation-delay:.24s}
+@keyframes shim{0%{background-position:120% 0}100%{background-position:-120% 0}}
+
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 </head>
@@ -269,10 +306,10 @@ canvas{display:block;width:100%;height:100%}
       <div class="tfbar" id="tfbar"></div>
     </div>
   </section>
-  <section class="view" id="v-level"><div class="pad" id="p-level"></div></section>
-  <section class="view" id="v-gamma"><div class="pad" id="p-gamma"></div></section>
-  <section class="view" id="v-agent"><div class="pad" id="p-agent"></div></section>
-  <section class="view" id="v-plan"><div class="pad" id="p-plan"></div></section>
+  <section class="view" id="v-level"><div class="pad" id="p-level"><div class="skel"><i></i><i></i><i></i></div></div></section>
+  <section class="view" id="v-gamma"><div class="pad" id="p-gamma"><div class="skel"><i></i><i></i><i></i></div></div></section>
+  <section class="view" id="v-agent"><div class="pad" id="p-agent"><div class="skel"><i></i><i></i><i></i></div></div></section>
+  <section class="view" id="v-plan"><div class="pad" id="p-plan"><div class="skel"><i></i><i></i><i></i></div></div></section>
 </main>
 
 <nav class="tabbar" id="tabbar">
@@ -291,7 +328,7 @@ canvas{display:block;width:100%;height:100%}
 
 const S = {
   market:"NQ", tf:"15m", data:null, plan:null, messages:[], overview:[],
-  view:0, layers:{orbs:true, fix:true, live:true, zonen:true, profil:true, session:true},
+  view:0, layers:{gcurve:false, orbs:true, fix:true, live:true, zonen:true, profil:true, session:true},
   fitAll:false, lastMsgCount:0, busy:false, cross:null, trails:null,
 };
 const TFS = ["1m","5m","15m","30m","1h","1d"];
@@ -308,6 +345,28 @@ const esc = s => String(s==null?"":s).replace(/[&<>"']/g,
 const hhmm = iso => { try{ return new Date(iso).toLocaleTimeString("de-DE",
   {hour:"2-digit",minute:"2-digit"}); }catch(e){ return ""; } };
 const buzz = ms => { try{ navigator.vibrate && navigator.vibrate(ms); }catch(e){} };
+
+/** Kurse weich auf den neuen Wert zaehlen statt springen zu lassen.
+    Bei einer Zahl, die sich alle 20 Sekunden aendert, macht der Sprung
+    aus einer kleinen Bewegung eine grosse - das Zaehlen zeigt die
+    Richtung, ohne sie zu uebertreiben. */
+const _ticks = new WeakMap();
+function tickTo(el, val, dur=520){
+  if(val==null || isNaN(val)){ el.textContent="—"; return; }
+  const from = _ticks.get(el);
+  _ticks.set(el, val);
+  if(from==null || Math.abs(val-from) < 0.01 || !window.requestAnimationFrame){
+    el.textContent = fmt(val); return;
+  }
+  const t0 = performance.now();
+  const step = now => {
+    const k = Math.min(1, (now-t0)/dur);
+    const e = 1 - Math.pow(1-k, 3);          // sanft auslaufend
+    el.textContent = fmt(from + (val-from)*e);
+    if(k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
 
 // ======================= Laden =======================
 async function load(){
@@ -353,11 +412,23 @@ let W=0,H=0,dpr=1;
 const PAD={r:56,b:56,t:6};
 
 function resize(){
-  const w=$("cvwrap"); dpr=Math.min(devicePixelRatio||1,2);
+  const w=$("cvwrap");
+  // Bis Faktor 3 statt 2: ein iPhone Pro zeichnet damit auf dem echten
+  // Panelraster statt auf zwei Dritteln davon.
+  dpr = Math.min(devicePixelRatio||1, 3);
   W=w.clientWidth; H=w.clientHeight;
-  cv.width=W*dpr; cv.height=H*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
+  cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.textRendering = "geometricPrecision";
+  ORB_SPRITES.clear();
   draw();
 }
+
+/** Auf das Geraetepixel rasten. Eine Linie auf halbem CSS-Pixel ist bei
+    Faktor 3 kein halbes Geraetepixel mehr und wird grau ausgefranst. */
+function snap(v){ return Math.round(v*dpr)/dpr; }
+/** Mittiger Versatz fuer haarscharfe 1px-Linien, abhaengig vom Faktor. */
+function half(){ return 0.5/dpr; }
 function fitView(){
   const n=(S.data?.bars||[]).length; if(!n){ S.vw=null; return; }
   const want=Math.min(n, S.tf==="1d"?90:70);
@@ -439,6 +510,39 @@ function tToX(ts, bars, bw){
   return (lo + (ts - bars[lo].t)/span)*bw + bw/2;
 }
 
+/** Vorgezeichnete Orbs mit Leuchtkern.
+
+    Ein radialer Verlauf je Punkt waere bei ueber tausend Orbs zu teuer.
+    Stattdessen wird je Farbe und gerasterter Groesse einmal ein Sprite
+    gezeichnet und danach nur noch kopiert - das haelt das Schieben
+    fluessig und gibt trotzdem echtes Leuchten statt flacher Kreise. */
+const ORB_SPRITES = new Map();
+function orbSprite(color, r){
+  const key = color+"|"+r+"|"+dpr;
+  let sp = ORB_SPRITES.get(key);
+  if(sp) return sp;
+  const pad = r*1.7, size = Math.ceil(pad*2*dpr);
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const g = c.getContext("2d");
+  g.setTransform(dpr,0,0,dpr,0,0);
+  const cx = pad, cy = pad;
+  const grad = g.createRadialGradient(cx,cy,0, cx,cy,pad);
+  grad.addColorStop(0,    color);
+  grad.addColorStop(0.52, color);
+  grad.addColorStop(0.74, color+"55");
+  grad.addColorStop(1,    color+"00");
+  g.fillStyle = grad;
+  g.beginPath(); g.arc(cx,cy,pad,0,6.2832); g.fill();
+  // harter Kern, damit die Kette bei kleinen Groessen nicht verwaescht
+  g.globalCompositeOperation = "source-over";
+  g.fillStyle = color;
+  g.beginPath(); g.arc(cx,cy,Math.max(0.6,r*0.55),0,6.2832); g.fill();
+  sp = {canvas:c, pad};
+  ORB_SPRITES.set(key, sp);
+  return sp;
+}
+
 /** Wand-Verlauf als Orb-Ketten: x = Zeit, y = Preis, Radius = Bestand.
     Eine Linie sagt, wo die Wand liegt. Die Kette sagt zusaetzlich, ob
     sie waechst oder zerfaellt. */
@@ -455,24 +559,100 @@ function drawOrbs(ctx, bars, y, bw, pw, ph, V){
       const yy = y(p.p);
       if(yy < PAD.t - 4 || yy > PAD.t + ph + 4) return;
       const rel = Math.min(1, p.oi / peak);
-      const r = 1.4 + 4.6 * Math.sqrt(rel);
-      ctx.globalAlpha = 0.30 + 0.62 * rel;
-      ctx.fillStyle = col;
-      ctx.beginPath(); ctx.arc(x, yy, r, 0, 6.2832); ctx.fill();
+      // Groesse auf halbe Pixel rastern, damit die Sprite-Sammlung klein
+      // bleibt - sonst entsteht je Punkt ein eigenes Sprite.
+      const r = Math.round((1.1 + 3.4 * Math.sqrt(rel)) * 2) / 2;
+      const sp = orbSprite(col, r);
+      ctx.globalAlpha = 0.30 + 0.55 * rel;
+      ctx.drawImage(sp.canvas, x - sp.pad, yy - sp.pad, sp.pad*2, sp.pad*2);
       // Index-Ketten bekommen einen Ring: die Herkunft bleibt sichtbar,
       // ohne dass eine zweite Farbe noetig waere.
-      if(isIndex && r > 2){
-        ctx.globalAlpha = 0.9; ctx.strokeStyle = col; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(x, yy, r + 1.4, 0, 6.2832); ctx.stroke();
+      if(isIndex && r > 2.5){
+        ctx.globalAlpha = 0.85; ctx.strokeStyle = col; ctx.lineWidth = 1/dpr*1.2;
+        ctx.beginPath(); ctx.arc(x, yy, r + 1.6, 0, 6.2832); ctx.stroke();
       }
     });
   });
   ctx.globalAlpha = 1;
 }
 
+/** Netto-Gamma ueber das Preisgitter, als Band am rechten Rand.
+
+    Die Kurve ist die eigentliche Aussage der Optionsdaten: nicht wo das
+    Gamma am groessten ist - das klebt am Geld - sondern wo es sein
+    Vorzeichen wechselt. Oberhalb daempfen Dealer, unterhalb verstaerken
+    sie. Genau diese Nullstelle ist das Zero-Gamma-Level. */
+function drawGammaCurve(ctx, y, pw, ph, V, lo, hi){
+  const c = S.data?.curve;
+  if(!c || c.length < 4) return;
+  // Die Kurve spannt sechs Prozent um den Spot. Zeigt der Chart nur ein
+  // Prozent davon, wird aus ihr eine Diagonale ohne Aussage - dann
+  // bleibt sie besser weg, als den Chart zu verstellen.
+  const curveSpan = Math.abs(c[c.length-1].s - c[0].s) || 1;
+  if((hi - lo) / curveSpan < 0.55) return;
+  const bandW = Math.min(58, pw*0.17);
+  const x0 = pw - bandW;                       // Mittelachse links vom Rand
+
+  const mx = Math.max(...c.map(p=>Math.abs(p.gex))) || 1;
+  const pos = V("--support"), neg = V("--warn");
+  ctx.save();
+  ctx.beginPath(); ctx.rect(x0 - bandW, PAD.t, bandW*2, ph); ctx.clip();
+
+  // Flaeche, in zwei Haelften nach Vorzeichen
+  [1,-1].forEach(sign=>{
+    ctx.beginPath();
+    ctx.moveTo(x0, y(c[0].s));
+    c.forEach(p=>{
+      const v = (Math.sign(p.gex)===sign) ? Math.abs(p.gex)/mx : 0;
+      ctx.lineTo(x0 + sign*v*bandW*0.92, y(p.s));
+    });
+    ctx.lineTo(x0, y(c[c.length-1].s));
+    ctx.closePath();
+    const g = ctx.createLinearGradient(x0, 0, x0 + sign*bandW, 0);
+    const col = sign > 0 ? pos : neg;
+    g.addColorStop(0, col+"00"); g.addColorStop(1, col+"3A");
+    ctx.fillStyle = g; ctx.fill();
+  });
+
+  // Umriss
+  ctx.beginPath();
+  c.forEach((p,i)=>{
+    const x = x0 + (p.gex/mx)*bandW*0.92, yy = y(p.s);
+    i ? ctx.lineTo(x,yy) : ctx.moveTo(x,yy);
+  });
+  ctx.strokeStyle = V("--ink-dim"); ctx.globalAlpha=.55;
+  ctx.lineWidth = 1.2; ctx.stroke(); ctx.globalAlpha=1;
+
+  // Mittelachse und Nullstelle
+  ctx.strokeStyle = V("--line"); ctx.globalAlpha=.8; ctx.lineWidth=1/dpr;
+  ctx.beginPath(); ctx.moveTo(snap(x0)+half(), PAD.t); ctx.lineTo(snap(x0)+half(), PAD.t+ph); ctx.stroke();
+  ctx.globalAlpha=1;
+  if(S.data.flip){
+    const yy = y(S.data.flip);
+    if(yy>PAD.t && yy<PAD.t+ph){
+      ctx.fillStyle = V("--pivot");
+      ctx.beginPath(); ctx.arc(x0, yy, 3.2, 0, 6.2832); ctx.fill();
+      ctx.globalAlpha=.35;
+      ctx.beginPath(); ctx.arc(x0, yy, 7, 0, 6.2832); ctx.fill();
+      ctx.globalAlpha=1;
+    }
+  }
+  ctx.restore();
+  ctx.font = "8px "+V("--mono"); ctx.fillStyle = V("--ink-faint");
+  ctx.textAlign = "center";
+  ctx.fillText("γ", x0, PAD.t + 9);
+  ctx.textAlign = "left";
+}
+
 function draw(){
   const V=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-  ctx.clearRect(0,0,W,H); ctx.fillStyle=V("--ground"); ctx.fillRect(0,0,W,H);
+  ctx.clearRect(0,0,W,H);
+  // Grund mit leichtem Verlauf statt Flaeche - die Kerzen stehen dadurch
+  // freier, ohne dass eine zweite Farbe ins Spiel kommt
+  const bg = ctx.createLinearGradient(0,0,0,H);
+  bg.addColorStop(0, V("--panel")); bg.addColorStop(0.55, V("--ground"));
+  bg.addColorStop(1, V("--ground"));
+  ctx.fillStyle = bg; ctx.fillRect(0,0,W,H);
   const bars=vbars();
   if(!bars.length){
     ctx.fillStyle=V("--ink-faint"); ctx.font="13px "+V("--sans"); ctx.textAlign="center";
@@ -503,14 +683,27 @@ function draw(){
     ctx.fillStyle=`rgba(${c},.075)`; ctx.fillRect(0,y1,pw,Math.max(1.5,y2-y1));
   });
 
+  if(S.layers.gcurve) drawGammaCurve(ctx, y, pw, ph, V, lo, hi);
   if(S.layers.orbs) drawOrbs(ctx, bars, y, bw, pw, ph, V);
 
+  const upC=V("--up"), dnC=V("--down");
   bars.forEach((b,i)=>{
     const x=i*bw, cw=Math.max(1.3,bw*0.6), up=b.c>=b.o;
-    ctx.strokeStyle=ctx.fillStyle=V(up?"--up":"--down"); ctx.lineWidth=1;
-    ctx.beginPath(); ctx.moveTo(x+bw/2,y(b.h)); ctx.lineTo(x+bw/2,y(b.l)); ctx.stroke();
-    const t=y(Math.max(b.o,b.c)), bo=y(Math.min(b.o,b.c));
-    ctx.fillRect(x+(bw-cw)/2, t, cw, Math.max(1.3,bo-t));
+    const col = up?upC:dnC;
+    // Docht auf das Geraetepixel rasten, sonst franst eine 1px-Linie aus
+    const wx = snap(x+bw/2)+half();
+    ctx.strokeStyle=col; ctx.lineWidth=Math.max(1/dpr, bw*0.055);
+    ctx.beginPath(); ctx.moveTo(wx,snap(y(b.h))); ctx.lineTo(wx,snap(y(b.l))); ctx.stroke();
+    const t=snap(y(Math.max(b.o,b.c))), bo=snap(y(Math.min(b.o,b.c)));
+    const h=Math.max(1/dpr, bo-t), bx=snap(x+(bw-cw)/2);
+    // Leichter Verlauf im Koerper: gibt der Kerze Volumen, ohne dass die
+    // Farbe ihre Bedeutung verliert
+    if(h > 3){
+      const g=ctx.createLinearGradient(bx,t,bx+cw,t);
+      g.addColorStop(0, col); g.addColorStop(1, col+"CC");
+      ctx.fillStyle=g;
+    } else ctx.fillStyle=col;
+    ctx.fillRect(bx, t, cw, h);
   });
 
   const used=[];
@@ -518,7 +711,8 @@ function draw(){
     const yy=y(l.p); if(yy<PAD.t-2||yy>PAD.t+ph+2) return;
     const c=V(l.c);
     ctx.globalAlpha=l.dim??1; ctx.strokeStyle=c; ctx.lineWidth=l.w; ctx.setLineDash(l.dash||[]);
-    ctx.beginPath(); ctx.moveTo(0,yy+.5); ctx.lineTo(pw,yy+.5); ctx.stroke();
+    const ly = snap(yy)+half();
+    ctx.beginPath(); ctx.moveTo(0,ly); ctx.lineTo(pw,ly); ctx.stroke();
     ctx.setLineDash([]); ctx.globalAlpha=1;
     if(!l.badge) return;
     let by=yy; while(used.some(u=>Math.abs(u-by)<11)) by+=11;
@@ -563,7 +757,8 @@ function draw(){
     const yy=y(S.data.spot);
     if(yy>=PAD.t&&yy<=PAD.t+ph){
       ctx.strokeStyle=V("--ink"); ctx.globalAlpha=.45; ctx.setLineDash([4,3]);
-      ctx.beginPath(); ctx.moveTo(0,yy+.5); ctx.lineTo(pw,yy+.5); ctx.stroke();
+      const sy=snap(yy)+half();
+      ctx.beginPath(); ctx.moveTo(0,sy); ctx.lineTo(pw,sy); ctx.stroke();
       ctx.setLineDash([]); ctx.globalAlpha=1;
       ctx.fillStyle=V("--ink"); ctx.fillRect(pw+2,yy-7.5,PAD.r-4,15);
       ctx.fillStyle=V("--ground"); ctx.font="700 10px "+V("--mono"); ctx.textAlign="left";
@@ -581,6 +776,13 @@ function draw(){
     $("cross").innerHTML = `${new Date(b.t*1000).toLocaleString("de-DE",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}<br>`+
       `O ${fmt(b.o)}&nbsp; H ${fmt(b.h)}<br>L ${fmt(b.l)}&nbsp; C ${fmt(b.c)}`;
   } else $("cross").className="cross";
+
+  // Vignette: nimmt den Raendern Gewicht, damit die Mitte traegt
+  const vig = ctx.createRadialGradient(W*0.45, H*0.45, Math.min(W,H)*0.35,
+                                       W*0.45, H*0.45, Math.max(W,H)*0.78);
+  vig.addColorStop(0, "rgba(0,0,0,0)");
+  vig.addColorStop(1, "rgba(0,0,0,0.30)");
+  ctx.fillStyle = vig; ctx.fillRect(0,0,pw,PAD.t+ph);
 
   ctx.fillStyle=V("--ink-faint"); ctx.font="9px "+V("--mono");
   const st=Math.max(1,Math.floor(bars.length/4));
@@ -651,7 +853,7 @@ wrap.addEventListener("wheel",e=>{
 function render(){
   const d=S.data; if(!d) return;
   $("sym").textContent = SYM[S.market]||S.market;
-  $("spot").textContent = fmt(d.spot);
+  tickTo($("spot"), d.spot);
   const ov = S.overview.find(o=>o.key===S.market);
   const ch = $("chg");
   if(ov && ov.change!=null){
@@ -700,7 +902,7 @@ function switchMarket(k){
   if(k===S.market) return;
   S.market=k; S.plan=null; S.data=null; S.view0=false; S.lastMsgCount=0; S.trails=null;
   buzz(10); closeSheet();
-  ["p-level","p-gamma","p-agent","p-plan"].forEach(id=>$(id).innerHTML='<div class="empty">lädt…</div>');
+  ["p-level","p-gamma","p-agent","p-plan"].forEach(id=>$(id).innerHTML='<div class="skel"><i></i><i></i><i></i></div>');
   load(); loadMessages(); loadPlan(); loadTrails();
 }
 
@@ -937,7 +1139,8 @@ $("idbtn").onclick=()=>{
 };
 
 function layerSheet(){
-  const items=[["orbs","Wand-Verlauf","Orb-Ketten aus allen Optionsketten"],
+  const items=[["gcurve","Gamma-Kurve","nur beim Herauszoomen aussagekräftig"],
+               ["orbs","Wand-Verlauf","Orb-Ketten aus allen Optionsketten"],
                ["fix","Fixe Level","aus dem Zonenbuch"],
                ["live","Geisterlinien","wohin die Wand seither wanderte"],
                ["zonen","Konfluenz-Zonen","getönte Bänder"],

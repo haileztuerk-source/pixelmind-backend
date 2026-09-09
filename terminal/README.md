@@ -92,12 +92,25 @@ Bestand. Eine Linie sagt, wo die Wand liegt - die Kette sagt zusaetzlich,
 ob sie waechst oder zerfaellt.
 
 - Gold = Call-Seite, Tuerkis = Put-Seite (dieselben Rollenfarben wie ueberall)
+- Jeder Orb ist ein vorgezeichnetes Sprite mit Leuchtkern; bei ueber tausend
+  Punkten je Bild waere ein radialer Verlauf pro Punkt zu teuer
 - Ein Ring um den Orb heisst: aus der Index-Kette, nicht aus der ETF-Kette
 - Ohne Datenbank ist die Kette nach jedem Neustart leer
 
 Level ausserhalb des Sichtfensters erscheinen als **Randmarken** am
 rechten Rand statt die Skala aufzuziehen - sonst staucht eine Wand
 zwei Prozent entfernt die Kerzen zu einem Strich.
+
+## Zeichenschicht
+
+- **Geraetefaktor bis 3.** Ein iPhone Pro zeichnet damit auf dem echten
+  Panelraster - 1170x1914 Canvas-Pixel statt 780x1276.
+- **Linien auf dem Geraetepixel.** Ein halbes CSS-Pixel ist bei Faktor 3
+  kein halbes Geraetepixel; ohne Rasterung franst jede 1px-Linie grau aus.
+- **Orb-Sprites** je Farbe und gerasterter Groesse, danach nur kopiert.
+- Kerzenkoerper mit leichtem Verlauf, Grund mit Verlauf, Vignette an den
+  Raendern - Tiefe ohne eine zweite Farbe.
+- Kurse zaehlen weich auf den neuen Wert, statt zu springen.
 
 ## Bedienung
 
