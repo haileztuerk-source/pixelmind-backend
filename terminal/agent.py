@@ -21,6 +21,8 @@ from datetime import datetime, timezone, timedelta
 
 import requests
 
+from .store import Store
+
 # Auslöser mit Abklingzeit in Sekunden. Die vier als "major" markierten
 # ueberleben auch die Budget-Drosselung.
 TRIGGERS = {
@@ -58,28 +60,17 @@ class Agent:
     def __init__(self):
         self.lock = threading.Lock()
         self.state = {"markets": {}, "budget": {"day": None, "used": 0}}
+        self._store = Store("agent_state", STATE_PATH)
         self._load()
 
     # ---------------------------------------------------------------- Zustand
     def _load(self):
-        try:
-            with open(STATE_PATH, "r", encoding="utf-8") as fh:
-                self.state = json.load(fh)
-        except Exception:
-            pass
+        self.state = self._store.load({}) or {}
         self.state.setdefault("markets", {})
         self.state.setdefault("budget", {"day": None, "used": 0})
 
     def _save(self):
-        # Atomar schreiben, damit ein Neustart mitten im Schreiben keinen
-        # halben Verlauf hinterlaesst - wie im Original.
-        try:
-            tmp = STATE_PATH + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(self.state, fh, ensure_ascii=False)
-            os.replace(tmp, STATE_PATH)
-        except Exception:
-            pass
+        self._store.save(self.state)
 
     def _market(self, key):
         m = self.state["markets"].setdefault(key, {})

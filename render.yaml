@@ -20,6 +20,10 @@ services:
     startCommand: gunicorn --workers 1 --threads 8 --timeout 120 terminal_app:app
     healthCheckPath: /health
     envVars:
+      # Verbindungszeichenfolge aus Neon. Ohne sie laeuft der Dienst
+      # weiter, verliert aber bei jedem Neustart Zonenbuch und Verlauf.
+      - key: DATABASE_URL
+        sync: false
       - key: GEMINI_API_KEY
         sync: false   # optional - ohne Key antwortet der Agent aus der Engine
       - key: SCAN_INTERVAL

@@ -17,7 +17,7 @@ from flask_cors import CORS
 from . import market, cboe, gex, zones, news
 from .agent import AGENT
 from .daybook import BOOK
-from . import keepalive
+from . import keepalive, store
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
@@ -160,7 +160,8 @@ keepalive.start()
 def health():
     return jsonify({"ok": True, "active": _active_markets(),
                     "budget": AGENT.budget(),
-                    "keepalive": keepalive.status()})
+                    "keepalive": keepalive.status(),
+                    "store": store.health()})
 
 
 @app.route("/api/markets")

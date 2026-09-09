@@ -38,6 +38,8 @@ damit auch nicht:
 | `daybook.py` | Zonenbuch: Level am Tagesanker einfrieren, danach fortschreiben |
 | `news.py` | Wirtschaftskalender und gefilterte Schlagzeilen |
 | `agent.py` | 8 Ausloeser mit Abklingzeiten, Tagesplan, Budget-Waechter |
+| `store.py` | Zustandsspeicher: Postgres wenn `DATABASE_URL` gesetzt, sonst Datei |
+| `keepalive.py` | Wachhalten nur waehrend der Handelszeit |
 | `server.py` | Flask, Endpunkte, Hintergrund-Scanner |
 | `static/index.html` | Handy-Oberflaeche im Redesign-Look vom 03.09. |
 
@@ -146,15 +148,39 @@ Deshalb haelt `keepalive.py` den Dienst nur waehrend der Handelszeit wach
 (12-21 Uhr UTC, werktags): rund **198 Stunden im Monat**. Ausserhalb
 schlaeft er und wacht beim ersten Aufruf in etwa 50 Sekunden auf.
 
-### Was kostenlos nicht geht
+### Zustand ueber Neustarts hinweg
 
-Der Free-Plan hat **keine persistente Festplatte**. Bei jedem Neustart
-sind Zonenbuch, Chat-Verlauf und Tagesplan weg. Der Pruefungszaehler ueber
-Tage - die Grundlage fuer "siebter Test" - haelt sein Versprechen damit
-nur, solange der Container lebt.
+Der Free-Plan hat keine persistente Festplatte. Ohne Datenbank waeren
+Zonenbuch, Chat-Verlauf und Tagesplan bei jedem Neustart weg - und der
+Pruefungszaehler ueber Tage waere in Wahrheit "seit dem letzten Neustart".
 
-Kostenlos loesbar ueber eine externe Datenbank mit Gratis-Kontingent
-(Neon, Supabase). Das ist eine Codeaenderung, keine Einstellung.
+`store.py` legt den Zustand deshalb in Postgres ab, sobald `DATABASE_URL`
+gesetzt ist. Ohne die Variable bleibt es beim Dateiverhalten, damit lokales
+Entwickeln keine Datenbank braucht.
+
+**Einrichtung bei Neon** (kostenlos, ohne Karte):
+
+1. neon.com -> Anmelden -> Projekt anlegen
+2. Die angebotene Connection String kopieren
+   (`postgresql://user:pass@ep-....neon.tech/neondb?sslmode=require`)
+3. In Render: Service `chartterminal` -> Environment -> `DATABASE_URL` einfuegen
+4. Nach dem Neustart meldet `/health` unter `store` den Eintrag
+   `"backend": "postgres"`
+
+Die Tabelle legt der Dienst selbst an - ein einziges Key-Value-Schema:
+
+```sql
+CREATE TABLE terminal_state (
+  key        TEXT PRIMARY KEY,
+  value      JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+Neon faehrt kostenlose Instanzen nach kurzer Ruhe herunter und beim
+naechsten Zugriff wieder hoch. `store.py` verbindet deshalb je Vorgang
+frisch und wiederholt einen ersten Fehlschlag - der Weckvorgang selbst
+darf keinen Datenverlust verursachen.
 
 ## Was diese Fassung bewusst nicht kann
 

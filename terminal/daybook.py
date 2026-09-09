@@ -22,6 +22,8 @@ import json
 import threading
 from datetime import datetime, timezone, timedelta
 
+from .store import Store
+
 # Tagesanker in UTC. Im Original 6 Uhr Serverzeit; hier UTC, weil der
 # ganze Dienst in UTC rechnet und Cboe seine Ketten so ausliefert.
 ANCHOR_HOUR = int(os.environ.get("ANCHOR_HOUR", "6"))
@@ -68,24 +70,15 @@ class DayBook:
     def __init__(self):
         self.lock = threading.Lock()
         self.state = {"markets": {}}
+        self._store = Store("zone_book", BOOK_PATH)
         self._load()
 
     def _load(self):
-        try:
-            with open(BOOK_PATH, "r", encoding="utf-8") as fh:
-                self.state = json.load(fh)
-        except Exception:
-            pass
+        self.state = self._store.load({}) or {}
         self.state.setdefault("markets", {})
 
     def _save(self):
-        try:
-            tmp = BOOK_PATH + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(self.state, fh, ensure_ascii=False)
-            os.replace(tmp, BOOK_PATH)
-        except Exception:
-            pass
+        self._store.save(self.state)
 
     def _market(self, key):
         m = self.state["markets"].setdefault(key, {})
