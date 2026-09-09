@@ -26,4 +26,6 @@ services:
         value: "20"
       - key: AGENT_DAY_BUDGET
         value: "1400"
+      - key: ANCHOR_HOUR
+        value: "6"      # Tagesanker in UTC, wie TAGES_ANKER_STUNDE im Original
     plan: free

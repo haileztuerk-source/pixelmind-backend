@@ -16,6 +16,7 @@ from flask_cors import CORS
 
 from . import market, cboe, gex, zones, news
 from .agent import AGENT
+from .daybook import BOOK
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
@@ -88,6 +89,7 @@ def build_snapshot(key, interval="15m"):
     # Umweg ueber das verschachtelte Dict lesen koennen.
     snap.update({k: session.get(k) for k in ("on_high", "on_low", "on_day",
                                              "pdh", "pdl", "pwh", "pwl")})
+
     if gexp.get("ok"):
         snap.update({
             "regime": gexp["regime"],
@@ -112,6 +114,11 @@ def build_snapshot(key, interval="15m"):
     else:
         snap["regime"] = None
         snap["chain_stale"] = True
+
+    # Zonenbuch zuletzt: es friert die Gamma-Felder ein, die erst oben
+    # gesetzt wurden. Erst dadurch sind die Waende ueber den Tag hinweg
+    # dieselben Zahlen - ohne das wandert jede Marke mit jedem Snapshot.
+    snap["fixed"] = BOOK.update(key, snap)
     return snap
 
 
@@ -181,6 +188,34 @@ def candles():
     interval = request.args.get("tf", "15m")
     bars, src = market.bars(key, interval)
     return jsonify({"bars": bars, "source": src})
+
+
+@app.route("/api/overview")
+def overview():
+    """Kurs und Tagesveraenderung aller Maerkte - fuer die Marktleiste.
+
+    Nutzt bewusst nur den Intraday-Endpunkt (rund 100 KB je Markt) statt
+    der vollen Ketten (6 MB je Markt). Regime und Waende gibt es erst,
+    wenn ein Markt wirklich geoeffnet wird.
+    """
+    out = []
+    for key, conf in market.MARKETS.items():
+        bars, _ = cboe.intraday(conf["chain"], ttl=90)
+        last = bars[-1]["c"] if bars else None
+        first = bars[0]["o"] if bars else None
+        out.append({
+            "key": key, "name": conf["name"], "chain": conf["chain"],
+            "spot": last,
+            "change": (last - first) if (last and first) else None,
+            "change_pct": ((last / first - 1) * 100) if (last and first) else None,
+        })
+    return jsonify(out)
+
+
+@app.route("/api/book")
+def book():
+    key = request.args.get("market", market.DEFAULT_MARKET)
+    return jsonify(BOOK.view(key, snapshot(key)))
 
 
 @app.route("/api/agent/messages")

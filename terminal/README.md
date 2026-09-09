@@ -35,10 +35,49 @@ damit auch nicht:
 | `market.py` | Yahoo-Bars, ATR, Volumenprofil, Session-Marken, Bar-Kaskade |
 | `gex.py` | Waende, Zero-Gamma, Max Pain, Pin, Vanna, Charm, Verfallsleiter |
 | `zones.py` | Konfluenz-Zonen, `MERGE_ATR = 0.28` wie im Original |
+| `daybook.py` | Zonenbuch: Level am Tagesanker einfrieren, danach fortschreiben |
 | `news.py` | Wirtschaftskalender und gefilterte Schlagzeilen |
 | `agent.py` | 8 Ausloeser mit Abklingzeiten, Tagesplan, Budget-Waechter |
 | `server.py` | Flask, Endpunkte, Hintergrund-Scanner |
 | `static/index.html` | Handy-Oberflaeche im Redesign-Look vom 03.09. |
+
+## Fixe Level
+
+Ohne Einfrieren wandert jede Wand mit jedem Snapshot — und ein Level, das
+sich staendig verschiebt, laesst sich weder handeln noch messen. `daybook.py`
+uebernimmt die Mechanik aus `_zone_day_book()`:
+
+- **Anker** um `ANCHOR_HOUR` (Standard 6:00 UTC). Vor dem Anker zaehlt noch
+  der Vortag.
+- **Einfrieren** von Call-/Put-Waenden samt Leiter, Zero-Gamma, Max Pain und
+  Gamma-Pin. Danach bleiben diese Zahlen den Tag ueber stehen.
+- **Drift** gegen den laufenden Stand wird mitgefuehrt und im Chart als
+  Geisterlinie gezeichnet — man sieht, wohin die Wand seit dem Anker lief.
+- **Zustaende** `ungetestet -> im Test -> gehalten | gebrochen`. Bruch ist
+  Akzeptanz jenseits der Kante (0,15 ATR), nicht blosse Beruehrung.
+- **Anti-Zappel-Regel**: ein an der Kante zappelnder Kurs erzeugt eine
+  Beruehrungs-Episode, nicht dreissig (600 s Abstand).
+- **Identitaet ueber Tage**: ein Level behaelt seine ID, solange sein Strike
+  wiederkehrt. Der Pruefungszaehler laeuft weiter — die Voraussetzung fuer
+  "siebter Test" und "nie drin gewesen".
+- **Qualitaetssperre**: ist die Kette faul, bleibt das alte Buch stehen,
+  statt ein neues zu wuerfeln.
+
+## Bedienung
+
+Aufbau wie eine Social-App, weil ein Telefon einhaendig bedient wird:
+
+- **Bottom-Navigation** mit fuenf Ansichten — Chart, Level, Gamma, Agent,
+  Plan. Alles im Daumenbereich, Ziele mindestens 44 px.
+- **Wischen** zwischen den Ansichten (Scroll-Snap). Auf dem Chart selbst
+  schiebt und zoomt die Geste stattdessen den Kurs.
+- **Marktleiste** oben: alle fuenf Maerkte mit Kurs und Tagesveraenderung,
+  antippen wechselt. Speist sich aus dem Intraday-Endpunkt (100 KB je Markt)
+  statt aus den vollen Ketten (6 MB).
+- **Sheets von unten** fuer Markt und Chart-Ebenen statt Menues in der Mitte.
+- **Langes Druecken** im Chart blendet ein Fadenkreuz mit OHLC ein.
+- Die Werkzeugleiste des Originals hatte 16 Haekchen nebeneinander; hier
+  sind es zwei Menues und eine Chip-Reihe.
 
 ## Endpunkte
 
@@ -51,6 +90,8 @@ GET  /api/candles?market=NQ&tf=15m
 GET  /api/agent/messages?market=NQ
 POST /api/agent/chat        {"market":"NQ","text":"..."}
 GET  /api/agent/plan?market=NQ
+GET  /api/book?market=NQ    fixe Level mit Zustand und Drift
+GET  /api/overview          alle Maerkte mit Kurs und Tagesveraenderung
 ```
 
 ## Lokal starten
@@ -81,4 +122,6 @@ erfunden werden.
   Wochen sind im Original geplant, hier nicht gebaut.
 - **Kein Backtest, keine TerminalMap, keine Strike-Map.**
 - **Zustand ist fluechtig.** Auf dem Free-Plan verliert der Container
-  Chat-Verlauf und Tagesplan beim Neustart.
+  Chat-Verlauf, Zonenbuch und Tagesplan beim Neustart. Damit faellt auch
+  der Pruefungszaehler ueber Tage — er braucht einen persistenten Speicher,
+  um sein Versprechen zu halten.
