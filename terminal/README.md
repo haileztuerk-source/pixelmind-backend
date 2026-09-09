@@ -94,6 +94,17 @@ GET  /api/book?market=NQ    fixe Level mit Zustand und Drift
 GET  /api/overview          alle Maerkte mit Kurs und Tagesveraenderung
 ```
 
+## Auf dem Telefon installieren
+
+Es gibt **kein APK** — das hier ist eine Web-App. Nach dem Deployment
+verhaelt sie sich aber wie eine installierte App: `manifest.webmanifest`
+setzt Vollbild, Icon und Startfarbe.
+
+- **iPhone (Safari):** Teilen -> "Zum Home-Bildschirm"
+- **Android (Chrome):** Menue -> "App installieren"
+
+Danach startet sie ohne Browser-Leiste, mit eigenem Icon.
+
 ## Lokal starten
 
 ```bash
