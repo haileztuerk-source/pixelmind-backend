@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<meta name="theme-color" content="#0A0E14">
+<meta name="theme-color" content="#0A0C11">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="ChartTerminal">
@@ -16,11 +16,37 @@
    Gold = Widerstand, Türkis = Support, Beige = Pivot, Violett = Agent.
    Woher ein Level stammt, steht im Text, nie in der Farbe. */
 :root{
-  --ground:#0A0E14; --panel:#0F151D; --panel-2:#141B25; --panel-3:#1A2330;
-  --line:#243244; --line-soft:#182231;
-  --ink:#EAEFF5; --ink-dim:#8794A6; --ink-faint:#4E5D70;
-  --resist:#D9A441; --support:#3FA79E; --pivot:#C9C2AE; --agent:#8C7BAE;
-  --live:#3FA79E; --warn:#E0834A; --up:#B6C1CE; --down:#4D5866;
+  /* ── Grund ─────────────────────────────────────────────────────────
+     Nahezu neutrales Schwarz mit minimalem Kaelteanteil. Die Flaeche
+     traegt keine Bedeutung, damit die Overlays sie tragen koennen. */
+  --ground:#0A0C11; --panel:#11141B; --panel-2:#161A22; --panel-3:#1D222C;
+  --line:#28303C; --line-soft:#1C222B;
+  --ink:#ECEFF4; --ink-dim:#8B97A8; --ink-faint:#5A6675;
+
+  /* ── Daten: was ein Level bedeutet ─────────────────────────────────
+     Gold und Violett wie in der Vorlage. Jede dieser Farben steht fuer
+     eine Seite des Marktes und fuer nichts anderes. */
+  --resist:#E0A93C;   /* Call-Seite, Widerstand */
+  --support:#A97BE8;  /* Put-Seite, Support */
+  --pivot:#CFC6B2;    /* Pivot, Zero-Gamma, Max Pain */
+  --struct:#5B6A7D;   /* Struktur: POC, Vortagesmarken */
+
+  /* ── Stimme ────────────────────────────────────────────────────────
+     Der Agent bekommt das freigewordene Tuerkis. Kuehl, klar von Gold
+     und Violett getrennt, und nie an einem Level. */
+  --agent:#46C4BC;
+
+  /* ── Zustand: kein Datum, sondern eine Lage ────────────────────────
+     Regime, Kursveraenderung, Frische. Bewusst getrennt von den
+     Datenfarben, damit "LONG" nicht wie eine Put-Wand aussieht. */
+  --pos:#4FB477; --neg:#E5705A;
+  --live:#4FB477; --warn:#E5705A;
+
+  /* ── Kerzen ────────────────────────────────────────────────────────
+     Neutral gehalten. Traegt der Kurs selbst Farbe, konkurriert er mit
+     den Overlays - dasselbe macht die Vorlage. */
+  --up:#C2CBD6; --down:#4A5563;
+
   --mono:ui-monospace,"SF Mono","IBM Plex Mono",Menlo,Consolas,monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   --st:env(safe-area-inset-top,0px);
@@ -63,14 +89,14 @@ body.immersive .tabbar{--hide:110%}
 .price-wrap{margin-left:auto;text-align:right;line-height:1.2}
 .price{font-family:var(--mono);font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
 .chg{font-family:var(--mono);font-size:11.5px;font-variant-numeric:tabular-nums;color:var(--ink-dim)}
-.chg.up{color:var(--support)} .chg.dn{color:var(--warn)}
+.chg.up{color:var(--pos)} .chg.dn{color:var(--neg)}
 .rg{
   display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:700;
   padding:4px 9px;border-radius:20px;border:1px solid var(--line);color:var(--ink-dim);
   letter-spacing:.02em;white-space:nowrap;
 }
-.rg.long{color:var(--support);border-color:rgba(63,167,158,.42);background:rgba(63,167,158,.11)}
-.rg.short{color:var(--warn);border-color:rgba(224,131,74,.42);background:rgba(224,131,74,.11)}
+.rg.long{color:var(--pos);border-color:rgba(79,180,119,.42);background:rgba(79,180,119,.11)}
+.rg.short{color:var(--neg);border-color:rgba(229,112,90,.42);background:rgba(229,112,90,.11)}
 .rg i{width:5px;height:5px;border-radius:50%;background:currentColor}
 
 /* ============ Marktleiste ============ */
@@ -86,12 +112,12 @@ body.immersive .tabbar{--hide:110%}
   flex:none;min-width:86px;padding:8px 11px;border-radius:12px;background:var(--panel-2);
   border:1px solid var(--line-soft);text-align:left;
 }
-.mchip.on{border-color:var(--resist);background:rgba(217,164,65,.11)}
+.mchip.on{border-color:var(--resist);background:rgba(224,169,60,.11)}
 .mchip .k{font-size:11.5px;font-weight:700;color:var(--ink-dim)}
 .mchip.on .k{color:var(--resist)}
 .mchip .p{font-family:var(--mono);font-size:13px;font-weight:600;margin-top:2px;font-variant-numeric:tabular-nums}
 .mchip .c{font-family:var(--mono);font-size:10px;margin-top:1px;color:var(--ink-faint)}
-.mchip .c.up{color:var(--support)} .mchip .c.dn{color:var(--warn)}
+.mchip .c.up{color:var(--pos)} .mchip .c.dn{color:var(--neg)}
 
 /* ============ Ansichten ============ */
 .track{
@@ -158,8 +184,8 @@ canvas{display:block;width:100%;height:100%}
 .ch b{font-family:var(--mono);font-size:16px;font-weight:700;font-variant-numeric:tabular-nums}
 .ch .tag{font-size:10px;font-weight:700;letter-spacing:.04em;padding:3px 7px;border-radius:6px;
   background:var(--panel-3);color:var(--ink-dim)}
-.ch .tag.held{background:rgba(63,167,158,.16);color:var(--support)}
-.ch .tag.broken{background:rgba(224,131,74,.16);color:var(--warn)}
+.ch .tag.held{background:rgba(79,180,119,.16);color:var(--pos)}
+.ch .tag.broken{background:rgba(229,112,90,.16);color:var(--neg)}
 .ch .tag.tested{background:rgba(217,164,65,.16);color:var(--resist)}
 .ch .far{margin-left:auto;font-family:var(--mono);font-size:12.5px;color:var(--ink-dim);
   font-variant-numeric:tabular-nums}
@@ -190,7 +216,7 @@ canvas{display:block;width:100%;height:100%}
 .msg .mh .ts{margin-left:auto;color:var(--ink-faint)}
 .msg.proactive{background:var(--panel-2);border-left:3px solid var(--agent)}
 .msg.proactive .mh{color:var(--agent)}
-.msg.user{background:rgba(217,164,65,.10);border:1px solid rgba(217,164,65,.28);margin-left:30px}
+.msg.user{background:rgba(224,169,60,.10);border:1px solid rgba(224,169,60,.28);margin-left:30px}
 .msg.user .mh{color:var(--resist)}
 .msg.agent{background:var(--panel-2);border-left:3px solid var(--line)}
 .msg.agent .mh{color:var(--ink-faint)}
@@ -216,8 +242,8 @@ canvas{display:block;width:100%;height:100%}
 .plan p{font-size:13.5px;line-height:1.62;margin:0 0 8px}
 .plan ul{margin:0;padding-left:18px}
 .plan li{font-size:13.5px;line-height:1.6;margin-bottom:7px}
-.bias{display:inline-block;font-size:12px;font-weight:700;background:rgba(217,164,65,.13);
-  border:1px solid rgba(217,164,65,.35);color:var(--resist);padding:6px 12px;border-radius:9px;margin-bottom:9px}
+.bias{display:inline-block;font-size:12px;font-weight:700;background:rgba(224,169,60,.13);
+  border:1px solid rgba(224,169,60,.35);color:var(--resist);padding:6px 12px;border-radius:9px;margin-bottom:9px}
 .upd{border-left:3px solid var(--agent);background:var(--panel-2);border-radius:0 10px 10px 0;
   padding:11px 13px;margin-top:9px;font-size:13px;line-height:1.55}
 .upd .t{font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-bottom:5px}
@@ -517,12 +543,25 @@ function mergedFixed(){
 }
 
 /** Fixe Level aus dem Zonenbuch, dazu optional der laufende Stand als Geist. */
+/** Farbe nach Art des Levels, nicht nach seiner Lage zum Kurs.
+
+    Eine Call-Wand bleibt Gold, auch wenn der Kurs darueber steigt; ein
+    Zero-Gamma bleibt Pivot, auch wenn es unter dem Kurs liegt. Vorher
+    faerbte die Lage - dann leuchtete das Zero-Gamma wie eine Put-Wand
+    und behauptete etwas, das es nicht ist. */
+function levelColor(kind){
+  if(/^call/.test(kind)) return "--resist";
+  if(/^put/.test(kind))  return "--support";
+  if(/flip|pain|pin/.test(kind)) return "--pivot";
+  return "--struct";
+}
+
 function chartLevels(){
   const d=S.data; if(!d) return [];
   const out=[];
   const roleCol = p => p>d.spot*1.0015 ? "--resist" : p<d.spot*0.9985 ? "--support" : "--pivot";
   if(S.layers.fix) mergedFixed().forEach(l=>{
-    out.push({p:l.price, lab:l.labels.join(" · "), c:roleCol(l.price),
+    out.push({p:l.price, lab:l.labels.join(" · "), c:levelColor(l.kind),
       w:/_2|_3/.test(l.kind)?1:1.8,
       dash:l.state==="broken"?[2,3]:null, dim:l.state==="broken"?.55:1, badge:true});
   });
@@ -530,7 +569,7 @@ function chartLevels(){
     // Geisterlinien: wohin die Wand seit dem Einfrieren gewandert ist.
     mergedFixed().forEach(l=>{
       if(l.live && l.drift && Math.abs(l.drift) > (d.atr||1)*0.03)
-        out.push({p:l.live, lab:"", c:roleCol(l.live), w:1, dash:[1,5], dim:.4, badge:false});
+        out.push({p:l.live, lab:"", c:levelColor(l.kind), w:1, dash:[1,5], dim:.4, badge:false});
     });
   }
   if(S.layers.session){
@@ -587,12 +626,12 @@ function drawProfile(ctx, y, pw, ph, topPad, V){
   const vp = S.data.vp;
   const maxW = Math.min(pw*0.19, 74);
   const rowH = Math.max(1.1, ph / (vp.bins_n || 180));
-  const gold = [217,164,65], teal = [63,167,158], flat = [92,106,124];
+  const gold = [224,169,60], violet = [169,123,232], flat = [91,106,125];
 
   // Value Area als ruhiger Grund hinter dem Profil
   if(vp.val && vp.vah){
     const y1=y(vp.vah), y2=y(vp.val);
-    ctx.fillStyle="rgba(217,164,65,.035)";
+    ctx.fillStyle="rgba(224,169,60,.04)";
     ctx.fillRect(0, Math.min(y1,y2), maxW, Math.abs(y2-y1));
   }
 
@@ -606,7 +645,7 @@ function drawProfile(ctx, y, pw, ph, topPad, V){
     } else {
       // Rollenfarben: Faerbung nach gehandelter Optionsseite
       const t = (b.c - 0.5) * 2;             // -1 Put .. +1 Call
-      const to = t >= 0 ? gold : teal, k = Math.abs(t);
+      const to = t >= 0 ? gold : violet, k = Math.abs(t);
       rgb = flat.map((f,i)=> Math.round(f + (to[i]-f)*k));
       alpha = b.va ? 0.50 : 0.24;
     }
@@ -772,7 +811,7 @@ function draw(){
   if(S.layers.profil && S.data.vp?.bins) drawProfile(ctx, y, pw, ph, topPad, V);
   if(S.layers.zonen) (S.data.zones||[]).forEach(z=>{
     const y1=y(z.top),y2=y(z.bot);
-    const c = z.role==="resist"?"217,164,65" : z.role==="support"?"63,167,158" : "201,194,174";
+    const c = z.role==="resist"?"224,169,60" : z.role==="support"?"169,123,232" : "207,198,178";
     ctx.fillStyle=`rgba(${c},.075)`; ctx.fillRect(0,y1,pw,Math.max(1.5,y2-y1));
   });
 
@@ -1076,10 +1115,11 @@ function renderLevel(){
     : s==="tested"?'<span class="tag tested">im Test</span>'
     : '<span class="tag">ungetestet</span>';
   const col = p => p>d.spot*1.0015?"var(--resist)":p<d.spot*0.9985?"var(--support)":"var(--pivot)";
+  const kcol = k => `var(${levelColor(k)})`;
 
   let h = `<div class="sec">Fixe Level · eingefroren ${hhmm(anchor.ts)} am ${fx.anchor_hour}:00-Anker</div>`;
   h += lv.length ? lv.map(l=>`
-    <div class="card role" style="--c:${col(l.price)}">
+    <div class="card role" style="--c:${kcol(l.kind)}">
       <div class="ch">
         <b>${fmt(l.price)}</b>${stateTag(l.state)}
         <span class="far">${sgn(l.price-d.spot)}</span>

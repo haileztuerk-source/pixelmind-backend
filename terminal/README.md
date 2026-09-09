@@ -107,7 +107,7 @@ daraus **Orb-Ketten**: x ist die Zeit, y der Preis, der Radius der
 Bestand. Eine Linie sagt, wo die Wand liegt - die Kette sagt zusaetzlich,
 ob sie waechst oder zerfaellt.
 
-- Gold = Call-Seite, Tuerkis = Put-Seite (dieselben Rollenfarben wie ueberall)
+- Gold = Call-Seite, Violett = Put-Seite (dieselben Farben wie ueberall)
 - Jeder Orb ist ein vorgezeichnetes Sprite mit Leuchtkern; bei ueber tausend
   Punkten je Bild waere ein radialer Verlauf pro Punkt zu teuer
 - Ein Ring um den Orb heisst: aus der Index-Kette, nicht aus der ETF-Kette
@@ -147,6 +147,36 @@ Die Preisskala ist hart geklemmt: ein Level darf sie um hoechstens ein
 Viertel der Kerzenspanne je Seite aufziehen. Damit gehoeren den Kerzen
 immer mindestens zwei Drittel des Bildes; was weiter weg liegt, sagt
 die Randmarke.
+
+## Farbsystem
+
+Jede Farbe hat genau eine Aufgabe. Das ist der ganze Trick - vorher
+stand Tuerkis fuer Put-Waende, fuer "Regime long", fuer steigende Kurse
+und fuer den Agenten, also fuer vier Dinge gleichzeitig.
+
+**Daten - was ein Level bedeutet**
+
+| Farbe | | Bedeutung |
+|---|---|---|
+| `#E0A93C` | Gold | Call-Seite, Widerstand |
+| `#A97BE8` | Violett | Put-Seite, Support |
+| `#CFC6B2` | Bein | Pivot: Zero-Gamma, Max Pain, Gamma-Pin |
+| `#5B6A7D` | Schiefer | Struktur: POC, Vortagesmarken |
+
+**Stimme** — `#46C4BC` Tuerkis, allein fuer den Agenten. Erscheint nie
+an einem Level.
+
+**Zustand** — `#4FB477` und `#E5705A` fuer Regime, Kursveraenderung und
+Frische. Bewusst getrennt von den Datenfarben: sonst leuchtet "LONG"
+wie eine Put-Wand.
+
+**Kerzen** bleiben neutral (`#C2CBD6` / `#4A5563`). Traegt der Kurs
+selbst Farbe, konkurriert er mit den Overlays.
+
+Die Farbe folgt der **Art** des Levels, nicht seiner Lage: eine
+Call-Wand bleibt Gold, auch wenn der Kurs darueber steigt. Vorher
+faerbte die Lage - dann leuchtete das Zero-Gamma wie eine Put-Wand und
+behauptete etwas, das es nicht ist.
 
 ## Bedienung
 
