@@ -678,9 +678,23 @@ function orbSprite(color, r){
     sie waechst oder zerfaellt. */
 function drawOrbs(ctx, bars, y, bw, pw, ph, V, topPad){
   const tr = S.trails;
-  if(!tr || !(tr.tracks||[]).length) return;
-  const peak = tr.peak_oi || 1;
-  tr.tracks.forEach(t=>{
+  let tracks = tr && tr.tracks || [];
+  let peak = tr && tr.peak_oi || 1;
+
+  // Ohne aufgezeichneten Verlauf - frisch gestartet, Datenbank leer -
+  // waere die Ebene sonst unsichtbar, obwohl die Waende bekannt sind.
+  // Dann wird der aktuelle Stand als einzelner Punkt am rechten Rand
+  // gezeichnet; die Kette waechst daraus nach links.
+  if(!tracks.length && (S.data?.leading_walls||[]).length && bars.length){
+    const now = bars[bars.length-1].t;
+    peak = Math.max(...S.data.leading_walls.map(w=>w.oi)) || 1;
+    tracks = S.data.leading_walls.map(w=>({
+      side:w.side, kind:w.chain_kind,
+      points:[{t:now, p:w.price, oi:w.oi}],
+    }));
+  }
+  if(!tracks.length) return;
+  tracks.forEach(t=>{
     const col = V(t.side === "call" ? "--resist" : "--support");
     const isIndex = t.kind === "Index";
     t.points.forEach(p=>{
@@ -838,7 +852,7 @@ function draw(){
     ctx.fillRect(bx, t, cw, h);
   });
 
-  const used=[];
+  const used=[], usedBox=[];
   lv.sort((a,b)=>a.p-b.p).forEach(l=>{
     const yy=y(l.p); if(yy<topPad-2||yy>topPad+ph+2) return;
     const c=V(l.c);
@@ -866,15 +880,28 @@ function draw(){
       // Rechts neben dem Profil absetzen, nicht darauf - im Desktop
       // stehen die Kaesten ebenfalls frei.
       const profW = S.layers.profil ? Math.min(pw*0.19, 74) + 8 : 6;
-      const bw2=Math.max(w1,w2)+10, bx=profW;
+      const bw2=Math.max(w1,w2)+10;
+      // Dicht liegende Kaesten nach unten ausweichen lassen, sonst
+      // ueberdeckt der eine den anderen und beide sind unlesbar.
+      let byB = yy, bx = profW, guard = 0;
+      while(usedBox.some(u=>Math.abs(u.y-byB)<25 && Math.abs(u.x-bx)<bw2+6) && guard++<8){
+        byB += 25;
+      }
+      usedBox.push({y:byB, x:bx});
       if(bx+bw2 < pw-30){
+        // Verbinder, wenn der Kasten ausgewichen ist
+        if(Math.abs(byB-yy) > 1){
+          ctx.strokeStyle=c; ctx.globalAlpha=.4; ctx.lineWidth=1;
+          ctx.beginPath(); ctx.moveTo(bx+bw2/2, yy); ctx.lineTo(bx+bw2/2, byB-14); ctx.stroke();
+          ctx.globalAlpha=1;
+        }
         ctx.fillStyle=V("--ink"); ctx.globalAlpha=.93;
-        ctx.fillRect(bx, yy-14, bw2, 12);
-        ctx.fillStyle=c; ctx.fillRect(bx, yy-2, bw2, 12);
+        ctx.fillRect(bx, byB-14, bw2, 12);
+        ctx.fillStyle=c; ctx.fillRect(bx, byB-2, bw2, 12);
         ctx.globalAlpha=1;
         ctx.fillStyle=V("--ground"); ctx.textAlign="left";
-        ctx.font="7.5px "+V("--mono"); ctx.fillText(l.lab, bx+5, yy-5);
-        ctx.font="600 9px "+V("--mono"); ctx.fillText(fmt(l.p), bx+5, yy+7);
+        ctx.font="7.5px "+V("--mono"); ctx.fillText(l.lab, bx+5, byB-5);
+        ctx.font="600 9px "+V("--mono"); ctx.fillText(fmt(l.p), bx+5, byB+7);
       }
     }
   });
@@ -1031,7 +1058,9 @@ function render(){
   const stale = d.chain_stale || d.bar_source?.stale;
   $("meta").innerHTML =
     `${d.bar_source?.source==="cboe"?"Cboe":"Yahoo"}${stale?" · STALE":""} · ATR ${fmt(d.atr)} · `+
-    `${d.bars.length} Kerzen${S.trails?.tracks?.length && S.layers.orbs
+    `${d.bars.length} Kerzen${S.layers.profil && d.vp?.basis
+      ? " · "+(d.vp.basis==="volume" ? "Volumenprofil" : "TPO-Profil")
+      : ""}${S.trails?.tracks?.length && S.layers.orbs
       ? " · "+S.trails.tracks.length+" Spuren" : ""} · ${hhmm(d.ts)}`;
   renderTf(); renderStrip(); renderLevel(); renderGamma(); draw();
 }
@@ -1348,7 +1377,7 @@ function layerSheet(){
                ["fix","Fixe Level","aus dem Zonenbuch"],
                ["live","Geisterlinien","wohin die Wand seither wanderte"],
                ["zonen","Konfluenz-Zonen","getönte Bänder"],
-               ["profil","Volumenprofil","Streifen hinter den Kerzen"],
+               ["profil","Preisprofil","Optionsvolumen je Preis, sonst Zeit je Preis"],
                ["session","Struktur-Marken","POC, Vortageshoch und -tief"]];
   openSheet(`<div class="sh-t">Struktur im Chart</div>`+items.map(([k,l,s])=>`
     <div class="si ${S.layers[k]?"on":""}" data-l="${k}"><span class="box"></span>${l}

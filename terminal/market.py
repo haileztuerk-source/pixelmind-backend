@@ -196,6 +196,13 @@ def volume_profile(bars, bins=180):
     if total <= 0:
         return {}
 
+    # Liegt kein Volumen vor, hat oben jede Kerze den Ersatzwert 1
+    # beigetragen - dann zaehlt das Profil Zeit je Preis und ist ein
+    # TPO-Profil, kein Volumenprofil. Das darf nicht stillschweigend
+    # passieren: die beiden Groessen bedeuten Verschiedenes.
+    has_volume = any((b.get("v") or 0) > 0 for b in bars)
+    basis = "volume" if has_volume else "time"
+
     poc_i = max(range(bins), key=lambda i: tot[i])
     # Value Area: vom POC aus zur jeweils volumenstaerkeren Seite wachsen,
     # bis 70 Prozent erreicht sind.
@@ -228,6 +235,7 @@ def volume_profile(bars, bins=180):
                 lvn.append({"p": price(i), "w": tot[i] / peak})
 
     return {
+        "basis": basis,
         "poc": price(poc_i),
         "vah": price(hi_i),
         "val": price(lo_i),
