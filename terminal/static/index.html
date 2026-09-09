@@ -291,8 +291,8 @@ canvas{display:block;width:100%;height:100%}
 
 const S = {
   market:"NQ", tf:"15m", data:null, plan:null, messages:[], overview:[],
-  view:0, layers:{fix:true, live:true, zonen:true, profil:true, session:true},
-  fitAll:false, lastMsgCount:0, busy:false, cross:null,
+  view:0, layers:{orbs:true, fix:true, live:true, zonen:true, profil:true, session:true},
+  fitAll:false, lastMsgCount:0, busy:false, cross:null, trails:null,
 };
 const TFS = ["1m","5m","15m","30m","1h","1d"];
 const SYM = {NQ:"NDX", ES:"SPX", YM:"DJX", RTY:"RUT", GC:"GLD"};
@@ -320,6 +320,12 @@ async function load(){
     if(fresh || !S.view0) fitView();
     S.view0 = true;
     render();
+  }catch(e){}
+}
+async function loadTrails(){
+  try{
+    S.trails = await (await fetch(`/api/trails?market=${S.market}`)).json();
+    draw();
   }catch(e){}
 }
 async function loadOverview(){
@@ -416,6 +422,54 @@ function chartLevels(){
   return out;
 }
 
+/** Zeitstempel auf die X-Achse abbilden - ueber die Bars, nicht linear.
+    Zwischen zwei Sitzungen klafft eine Luecke, die eine reine
+    Zeitrechnung falsch auffuellen wuerde. */
+function tToX(ts, bars, bw){
+  const n = bars.length;
+  if(n < 2) return bw/2;
+  if(ts <= bars[0].t) return bw/2;
+  if(ts >= bars[n-1].t){
+    const step = bars[n-1].t - bars[n-2].t || 60;
+    return Math.min(n - 1 + (ts - bars[n-1].t)/step, n - 0.5)*bw + bw/2;
+  }
+  let lo=0, hi=n-1;
+  while(lo < hi-1){ const m=(lo+hi)>>1; if(bars[m].t <= ts) lo=m; else hi=m; }
+  const span = (bars[hi].t - bars[lo].t) || 1;
+  return (lo + (ts - bars[lo].t)/span)*bw + bw/2;
+}
+
+/** Wand-Verlauf als Orb-Ketten: x = Zeit, y = Preis, Radius = Bestand.
+    Eine Linie sagt, wo die Wand liegt. Die Kette sagt zusaetzlich, ob
+    sie waechst oder zerfaellt. */
+function drawOrbs(ctx, bars, y, bw, pw, ph, V){
+  const tr = S.trails;
+  if(!tr || !(tr.tracks||[]).length) return;
+  const peak = tr.peak_oi || 1;
+  tr.tracks.forEach(t=>{
+    const col = V(t.side === "call" ? "--resist" : "--support");
+    const isIndex = t.kind === "Index";
+    t.points.forEach(p=>{
+      const x = tToX(p.t, bars, bw);
+      if(x < -8 || x > pw + 8) return;
+      const yy = y(p.p);
+      if(yy < PAD.t - 4 || yy > PAD.t + ph + 4) return;
+      const rel = Math.min(1, p.oi / peak);
+      const r = 1.4 + 4.6 * Math.sqrt(rel);
+      ctx.globalAlpha = 0.30 + 0.62 * rel;
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.arc(x, yy, r, 0, 6.2832); ctx.fill();
+      // Index-Ketten bekommen einen Ring: die Herkunft bleibt sichtbar,
+      // ohne dass eine zweite Farbe noetig waere.
+      if(isIndex && r > 2){
+        ctx.globalAlpha = 0.9; ctx.strokeStyle = col; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(x, yy, r + 1.4, 0, 6.2832); ctx.stroke();
+      }
+    });
+  });
+  ctx.globalAlpha = 1;
+}
+
 function draw(){
   const V=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   ctx.clearRect(0,0,W,H); ctx.fillStyle=V("--ground"); ctx.fillRect(0,0,W,H);
@@ -427,7 +481,7 @@ function draw(){
   const pw=W-PAD.r, ph=H-PAD.b-PAD.t;
   let lo=Math.min(...bars.map(b=>b.l)), hi=Math.max(...bars.map(b=>b.h));
   const lv=chartLevels(), range=(hi-lo)||1;
-  const slack = S.fitAll ? Infinity : range*0.35;
+  const slack = S.fitAll ? Infinity : range*0.45;
   const loL=lo-slack, hiL=hi+slack;
   lv.forEach(l=>{ if(l.p>=loL&&l.p<=hiL){ lo=Math.min(lo,l.p); hi=Math.max(hi,l.p); }});
   if(S.data.spot){ lo=Math.min(lo,S.data.spot); hi=Math.max(hi,S.data.spot); }
@@ -448,6 +502,8 @@ function draw(){
     const c = z.role==="resist"?"217,164,65" : z.role==="support"?"63,167,158" : "201,194,174";
     ctx.fillStyle=`rgba(${c},.075)`; ctx.fillRect(0,y1,pw,Math.max(1.5,y2-y1));
   });
+
+  if(S.layers.orbs) drawOrbs(ctx, bars, y, bw, pw, ph, V);
 
   bars.forEach((b,i)=>{
     const x=i*bw, cw=Math.max(1.3,bw*0.6), up=b.c>=b.o;
@@ -475,6 +531,33 @@ function draw(){
       ctx.globalAlpha=.9; ctx.fillText(l.lab, pw-4, by-1); ctx.globalAlpha=1;
     }
   });
+
+  // Level ausserhalb des Fensters als Randmarke. Die Skala dafuer
+  // aufzuziehen wuerde die Kerzen zu einem Strich stauchen - die Marke
+  // sagt dasselbe und kostet keinen Platz.
+  if(!S.fitAll){
+    const off = lv.filter(l=>l.badge && (l.p > hi || l.p < lo));
+    const above = off.filter(l=>l.p > hi).sort((a,b)=>a.p-b.p).slice(0,3);
+    const below = off.filter(l=>l.p < lo).sort((a,b)=>b.p-a.p).slice(0,3);
+    ctx.font="9px "+V("--mono");
+    [[above,1],[below,-1]].forEach(([list,dir])=>{
+      list.forEach((l,i)=>{
+        const c=V(l.c);
+        const yy = dir>0 ? PAD.t+7+i*13 : PAD.t+ph-7-i*13;
+        const txt = (dir>0?"▲ ":"▼ ")+fmt(l.p);
+        const w = ctx.measureText(txt).width+9;
+        ctx.globalAlpha=.92; ctx.fillStyle=c;
+        ctx.fillRect(pw-w-3, yy-6, w, 12);
+        ctx.globalAlpha=1; ctx.fillStyle=V("--ground"); ctx.textAlign="left";
+        ctx.fillText(txt, pw-w+1, yy+3);
+        if(l.lab){
+          ctx.fillStyle=c; ctx.globalAlpha=.75; ctx.textAlign="right";
+          ctx.fillText(l.lab, pw-w-7, yy+3); ctx.globalAlpha=1;
+        }
+      });
+    });
+    ctx.textAlign="left";
+  }
 
   if(S.data.spot){
     const yy=y(S.data.spot);
@@ -581,7 +664,10 @@ function render(){
   const stale = d.chain_stale || d.bar_source?.stale;
   $("meta").innerHTML =
     `${d.bar_source?.source==="cboe"?"Cboe":"Yahoo"} · ${stale?"STALE":"live"} · ${d.delayed_minutes} Min verzögert<br>`+
-    `ATR ${fmt(d.atr)} · ${d.bars.length} Kerzen · ${hhmm(d.ts)}`;
+    `ATR ${fmt(d.atr)} · ${d.bars.length} Kerzen · ${hhmm(d.ts)}` +
+    (S.layers.orbs && S.trails?.tracks?.length
+      ? `<br>Orbs: ${S.trails.tracks.length} Wandspuren · Größe = Open Interest`
+      : "");
   renderTf(); renderStrip(); renderLevel(); renderGamma(); draw();
 }
 
@@ -612,10 +698,10 @@ function renderStrip(){
 
 function switchMarket(k){
   if(k===S.market) return;
-  S.market=k; S.plan=null; S.data=null; S.view0=false; S.lastMsgCount=0;
+  S.market=k; S.plan=null; S.data=null; S.view0=false; S.lastMsgCount=0; S.trails=null;
   buzz(10); closeSheet();
   ["p-level","p-gamma","p-agent","p-plan"].forEach(id=>$(id).innerHTML='<div class="empty">lädt…</div>');
-  load(); loadMessages(); loadPlan();
+  load(); loadMessages(); loadPlan(); loadTrails();
 }
 
 function renderLevel(){
@@ -645,6 +731,46 @@ function renderLevel(){
       </div>
     </div>`).join("")
     : '<div class="empty">Das Buch ist noch leer. Es wird am nächsten Tagesanker gefüllt.</div>';
+
+  // Leading Walls aus allen Ketten des Marktes
+  const lw = d.leading_walls || [];
+  const conf = d.wall_confluence || [];
+  if(conf.length){
+    h += `<div class="sec">Konfluenz über Ketten — dieselbe Wand, zwei Quellen</div>`;
+    h += conf.slice(0,4).map(z=>`
+      <div class="card role" style="--c:${col(z.mid)}">
+        <div class="ch"><b>${z.top-z.bot < 2 ? fmt(z.mid) : fmt(z.bot)+" – "+fmt(z.top)}</b>
+          <span class="tag">${esc(z.chains.join(" + "))}</span>
+          <span class="far">${sgn(z.mid-d.spot)}</span></div>
+        <div class="cs">${z.members} Wände auf einem Fleck · ${esc(z.sides.map(x=>x==="call"?"Call":"Put").join(" und "))}</div>
+        <div class="cm"><span>${fmtM(z.oi)} Open Interest</span></div>
+      </div>`).join("");
+  }
+  if(lw.length){
+    const mx = Math.max(...lw.map(w=>w.oi))||1;
+    const byChain = {};
+    lw.forEach(w=>{ (byChain[w.chain] = byChain[w.chain]||[]).push(w); });
+    h += `<div class="sec">Leading Walls je Kette</div>`;
+    Object.entries(byChain).forEach(([chain, ws])=>{
+      const grid = ws[0].grid;
+      h += `<div class="card"><div class="ch">
+        <b style="font-size:13px">${esc(chain)}</b>
+        <span class="tag">${esc(ws[0].chain_kind)}</span>
+        <span class="far">Raster ${fmt(grid)} Pkt</span></div>`;
+      h += ws.map(w=>`<div class="brow">
+        <span class="k" style="color:var(--${w.side==="call"?"resist":"support"})">${fmt(w.price)}</span>
+        <span class="bar" style="--c:var(--${w.side==="call"?"resist":"support"})"><i style="width:${(w.oi/mx*100).toFixed(0)}%"></i></span>
+        <span class="v">${fmtM(w.oi)}</span></div>`).join("");
+      h += `</div>`;
+    });
+    const r = d.chain_ratios||{};
+    const etf = Object.entries(r).find(([k,v])=>v!==1);
+    if(etf) h += `<div class="foot">ETF-Strikes sind über das Verhältnis
+      ${etf[0]} × ${etf[1].toFixed(3)} in den Index-Preisraum übersetzt — beide Kurse
+      zum selben Zeitpunkt aus derselben Quelle, keine Futures-Basis nötig.
+      Ein ${esc(etf[0])}-Strike-Schritt entspricht rund ${fmt((lw.find(w=>w.chain===etf[0])||{}).grid||0)}
+      Indexpunkten; das ist der Genauigkeitsboden jeder daraus abgeleiteten Marke.</div>`;
+  }
 
   h += `<div class="sec">Konfluenz-Zonen</div>`;
   const zs=d.zones||[];
@@ -811,7 +937,8 @@ $("idbtn").onclick=()=>{
 };
 
 function layerSheet(){
-  const items=[["fix","Fixe Level","aus dem Zonenbuch"],
+  const items=[["orbs","Wand-Verlauf","Orb-Ketten aus allen Optionsketten"],
+               ["fix","Fixe Level","aus dem Zonenbuch"],
                ["live","Geisterlinien","wohin die Wand seither wanderte"],
                ["zonen","Konfluenz-Zonen","getönte Bänder"],
                ["profil","Volumenprofil","Streifen hinter den Kerzen"],
@@ -831,9 +958,10 @@ function layerSheet(){
 addEventListener("resize",()=>{ resize(); track.scrollLeft=S.view*track.clientWidth; });
 new ResizeObserver(resize).observe($("cvwrap"));
 resize();
-loadOverview(); load(); loadMessages(); loadPlan();
+loadOverview(); load(); loadMessages(); loadPlan(); loadTrails();
 setInterval(()=>{ load(); loadMessages(); }, 20000);
 setInterval(loadOverview, 60000);
+setInterval(loadTrails, 60000);
 </script>
 </body>
 </html>

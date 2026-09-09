@@ -6,3 +6,5 @@ terminal_agent_state.json.tmp
 terminal_analysis.json
 gex_zone_book.json
 gex_zone_book.json.tmp
+wall_trail_*.json
+wall_trail_*.json.tmp

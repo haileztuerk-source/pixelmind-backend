@@ -14,10 +14,11 @@ from datetime import datetime, timezone
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
-from . import market, cboe, gex, zones, news
+from . import market, cboe, gex, zones, news, walls
 from .agent import AGENT
 from .daybook import BOOK
 from . import keepalive, store
+from .walltrail import TRAIL
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
@@ -116,6 +117,16 @@ def build_snapshot(key, interval="15m"):
         snap["regime"] = None
         snap["chain_stale"] = True
 
+    # Leading Walls ueber alle Ketten des Marktes - Index und ETF.
+    # Die ETF-Kette traegt bei NDX rund das Hundertfache an Open
+    # Interest; sie wegzulassen hiesse, die eigentliche Positionierung
+    # nicht zu sehen.
+    lw = walls.leading(key)
+    snap["leading_walls"] = lw["walls"]
+    snap["chain_ratios"] = lw["ratios"]
+    snap["wall_confluence"] = walls.confluence(lw["walls"], max(atr_v * 0.28, 1))
+    TRAIL.record(key, lw["walls"], spot)
+
     # Zonenbuch zuletzt: es friert die Gamma-Felder ein, die erst oben
     # gesetzt wurden. Erst dadurch sind die Waende ueber den Tag hinweg
     # dieselben Zahlen - ohne das wandert jede Marke mit jedem Snapshot.
@@ -180,9 +191,8 @@ def state():
         return jsonify({"error": "unbekanntes Intervall"}), 400
     snap = dict(snapshot(key, interval))
     if request.args.get("light") == "1":
-        snap.pop("bars", None)
-        snap.pop("rows", None)
-        snap.pop("curve", None)
+        for k in ("bars", "rows", "curve", "leading_walls"):
+            snap.pop(k, None)
     return jsonify(snap)
 
 
@@ -214,6 +224,18 @@ def overview():
             "change_pct": ((last / first - 1) * 100) if (last and first) else None,
         })
     return jsonify(out)
+
+
+@app.route("/api/trails")
+def trails():
+    """Wand-Verlauf als Spuren - Datengrundlage der Orb-Ketten.
+
+    Bewusst ein eigener Endpunkt: der Verlauf waechst ueber den Tag und
+    hat in der 20-Sekunden-Abfrage des Zustands nichts verloren.
+    """
+    key = request.args.get("market", market.DEFAULT_MARKET)
+    _touch(key)
+    return jsonify(TRAIL.series(key))
 
 
 @app.route("/api/book")

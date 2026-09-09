@@ -34,6 +34,8 @@ damit auch nicht:
 | `cboe.py` | Kette und Intraday-Bars vom Cboe-CDN, mit Stale-Cache |
 | `market.py` | Yahoo-Bars, ATR, Volumenprofil, Session-Marken, Bar-Kaskade |
 | `gex.py` | Waende, Zero-Gamma, Max Pain, Pin, Vanna, Charm, Verfallsleiter |
+| `walls.py` | Leading Walls ueber Index- und ETF-Kette, in einen Preisraum uebersetzt |
+| `walltrail.py` | Wand-Verlauf ueber die Sitzung - Datengrundlage der Orb-Ketten |
 | `zones.py` | Konfluenz-Zonen, `MERGE_ATR = 0.28` wie im Original |
 | `daybook.py` | Zonenbuch: Level am Tagesanker einfrieren, danach fortschreiben |
 | `news.py` | Wirtschaftskalender und gefilterte Schlagzeilen |
@@ -64,6 +66,38 @@ uebernimmt die Mechanik aus `_zone_day_book()`:
   "siebter Test" und "nie drin gewesen".
 - **Qualitaetssperre**: ist die Kette faul, bleibt das alte Buch stehen,
   statt ein neues zu wuerfeln.
+
+## Leading Walls und Orb-Ketten
+
+Ein Index hat zwei Ketten, die dieselbe Sache meinen: NDX und QQQ, SPX
+und SPY. Beide tragen echte Bestaende auf verschiedenen Rastern. Der
+ETF-Strike wird ueber das Verhaeltnis der beiden Spotkurse in den
+Index-Preisraum uebersetzt - beide Kurse zum selben Zeitpunkt aus
+derselben Quelle, keine Futures-Basis noetig.
+
+Das lohnt sich: **bei NDX traegt QQQ rund das Hundertfache an Open
+Interest** (227.000 gegen 2.400 Kontrakte auf der staerksten Put-Wand).
+Wer nur die Index-Kette liest, sieht die eigentliche Positionierung nicht.
+
+Rangfolge nach Open Interest, **nicht nach Gamma**. Gamma ist per
+Konstruktion am Geld maximal; danach zu ranken erzeugt die ATM-Artefakte,
+an denen die Zonen-Engine des Originals gelitten hat.
+
+### Die Ketten im Chart
+
+Cboe liefert immer nur den aktuellen Bestand. `walltrail.py` schreibt
+deshalb je 120 Sekunden eine Stuetzstelle mit, und das Frontend zeichnet
+daraus **Orb-Ketten**: x ist die Zeit, y der Preis, der Radius der
+Bestand. Eine Linie sagt, wo die Wand liegt - die Kette sagt zusaetzlich,
+ob sie waechst oder zerfaellt.
+
+- Gold = Call-Seite, Tuerkis = Put-Seite (dieselben Rollenfarben wie ueberall)
+- Ein Ring um den Orb heisst: aus der Index-Kette, nicht aus der ETF-Kette
+- Ohne Datenbank ist die Kette nach jedem Neustart leer
+
+Level ausserhalb des Sichtfensters erscheinen als **Randmarken** am
+rechten Rand statt die Skala aufzuziehen - sonst staucht eine Wand
+zwei Prozent entfernt die Kerzen zu einem Strich.
 
 ## Bedienung
 
