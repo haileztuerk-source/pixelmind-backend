@@ -677,115 +677,62 @@ function orbSprite(color, r){
     Eine Linie sagt, wo die Wand liegt. Die Kette sagt zusaetzlich, ob
     sie waechst oder zerfaellt. */
 function drawOrbs(ctx, bars, y, bw, pw, ph, V, topPad){
+  const walls = S.data?.leading_walls || [];
   const tr = S.trails;
-  let tracks = tr && tr.tracks || [];
-  let peak = tr && tr.peak_oi || 1;
+  const tracks = (tr && tr.tracks) || [];
+  if(!walls.length && !tracks.length) return;
+  if(!bars.length) return;
 
-  // Ohne aufgezeichneten Verlauf - frisch gestartet, Datenbank leer -
-  // waere die Ebene sonst unsichtbar, obwohl die Waende bekannt sind.
-  // Dann wird der aktuelle Stand als einzelner Punkt am rechten Rand
-  // gezeichnet; die Kette waechst daraus nach links.
-  if(!tracks.length && (S.data?.leading_walls||[]).length && bars.length){
-    const now = bars[bars.length-1].t;
-    peak = Math.max(...S.data.leading_walls.map(w=>w.oi)) || 1;
-    tracks = S.data.leading_walls.map(w=>({
-      side:w.side, kind:w.chain_kind,
-      points:[{t:now, p:w.price, oi:w.oi}],
-    }));
-  }
-  if(!tracks.length) return;
-  tracks.forEach(t=>{
-    const col = V(t.side === "call" ? "--resist" : "--support");
-    const isIndex = t.kind === "Index";
-    t.points.forEach(p=>{
-      const x = tToX(p.t, bars, bw);
-      if(x < -8 || x > pw + 8) return;
-      const yy = y(p.p);
-      if(yy < PAD.t - 4 || yy > PAD.t + ph + 4) return;
-      const rel = Math.min(1, p.oi / peak);
-      // Groesse auf halbe Pixel rastern, damit die Sprite-Sammlung klein
-      // bleibt - sonst entsteht je Punkt ein eigenes Sprite.
+  const bucket = (tr && tr.bucket) || 120;
+  const t0 = bars[0].t, t1 = bars[bars.length-1].t;
+
+  // Aufgezeichnete Staerke je Spur und Zeitfenster nachschlagbar machen
+  const rec = new Map();
+  let peak = 0;
+  tracks.forEach(tk=>{
+    tk.points.forEach(q=>{
+      rec.set(`${tk.chain}|${tk.side}|${tk.strike}|${q.t}`, q.oi);
+      if(q.oi > peak) peak = q.oi;
+    });
+  });
+  walls.forEach(w=>{ if(w.oi > peak) peak = w.oi; });
+  if(peak <= 0) return;
+
+  // Schrittweite: nie enger als vier Bildpunkte, sonst zeichnen sich die
+  // Orbs uebereinander und kosten nur Rechenzeit.
+  const pxPerSec = (pw) / Math.max(1, (t1 - t0));
+  const step = Math.max(bucket, Math.ceil(4 / Math.max(pxPerSec, 1e-9) / bucket) * bucket);
+
+  walls.forEach(w=>{
+    const yy = y(w.price);
+    if(yy < topPad-6 || yy > topPad+ph+6) return;
+    const col = V(w.side === "call" ? "--resist" : "--support");
+    const isIndex = w.chain_kind === "Index";
+    const key = `${w.chain}|${w.side}|${w.strike}`;
+
+    for(let t = t0; t <= t1 + bucket; t += step){
+      const x = tToX(t, bars, bw);
+      if(x < -8 || x > pw + 8) continue;
+      // Gemessen oder angenommen? Ein aufgezeichneter Wert schlaegt den
+      // aktuellen Bestand, sonst gilt der aktuelle als Annahme.
+      const slot = t - (t % bucket);
+      const measured = rec.get(`${key}|${slot}`);
+      const oi = measured != null ? measured : w.oi;
+      const rel = Math.min(1, oi / peak);
       const r = Math.round((1.1 + 3.4 * Math.sqrt(rel)) * 2) / 2;
       const sp = orbSprite(col, r);
-      ctx.globalAlpha = 0.30 + 0.55 * rel;
+      // Nicht gemessene Abschnitte deutlich zurueckgenommen: das Band
+      // zeigt, DASS die Wand da ist, ohne eine Staerke zu behaupten,
+      // die nicht erhoben wurde.
+      ctx.globalAlpha = measured != null ? (0.34 + 0.55*rel) : (0.17 + 0.30*rel);
       ctx.drawImage(sp.canvas, x - sp.pad, yy - sp.pad, sp.pad*2, sp.pad*2);
-      // Index-Ketten bekommen einen Ring: die Herkunft bleibt sichtbar,
-      // ohne dass eine zweite Farbe noetig waere.
-      if(isIndex && r > 2.5){
-        ctx.globalAlpha = 0.85; ctx.strokeStyle = col; ctx.lineWidth = 1/dpr*1.2;
+      if(isIndex && measured != null && r > 2.5){
+        ctx.globalAlpha = 0.8; ctx.strokeStyle = col; ctx.lineWidth = 1/dpr*1.2;
         ctx.beginPath(); ctx.arc(x, yy, r + 1.6, 0, 6.2832); ctx.stroke();
       }
-    });
+    }
   });
   ctx.globalAlpha = 1;
-}
-
-/** Netto-Gamma ueber das Preisgitter, als Band am rechten Rand.
-
-    Die Kurve ist die eigentliche Aussage der Optionsdaten: nicht wo das
-    Gamma am groessten ist - das klebt am Geld - sondern wo es sein
-    Vorzeichen wechselt. Oberhalb daempfen Dealer, unterhalb verstaerken
-    sie. Genau diese Nullstelle ist das Zero-Gamma-Level. */
-function drawGammaCurve(ctx, y, pw, ph, V, lo, hi, topPad){
-  const c = S.data?.curve;
-  if(!c || c.length < 4) return;
-  // Die Kurve spannt sechs Prozent um den Spot. Zeigt der Chart nur ein
-  // Prozent davon, wird aus ihr eine Diagonale ohne Aussage - dann
-  // bleibt sie besser weg, als den Chart zu verstellen.
-  const curveSpan = Math.abs(c[c.length-1].s - c[0].s) || 1;
-  if((hi - lo) / curveSpan < 0.55) return;
-  const bandW = Math.min(58, pw*0.17);
-  const x0 = pw - bandW;                       // Mittelachse links vom Rand
-
-  const mx = Math.max(...c.map(p=>Math.abs(p.gex))) || 1;
-  const pos = V("--support"), neg = V("--warn");
-  ctx.save();
-  ctx.beginPath(); ctx.rect(x0 - bandW, topPad, bandW*2, ph); ctx.clip();
-
-  // Flaeche, in zwei Haelften nach Vorzeichen
-  [1,-1].forEach(sign=>{
-    ctx.beginPath();
-    ctx.moveTo(x0, y(c[0].s));
-    c.forEach(p=>{
-      const v = (Math.sign(p.gex)===sign) ? Math.abs(p.gex)/mx : 0;
-      ctx.lineTo(x0 + sign*v*bandW*0.92, y(p.s));
-    });
-    ctx.lineTo(x0, y(c[c.length-1].s));
-    ctx.closePath();
-    const g = ctx.createLinearGradient(x0, 0, x0 + sign*bandW, 0);
-    const col = sign > 0 ? pos : neg;
-    g.addColorStop(0, col+"00"); g.addColorStop(1, col+"3A");
-    ctx.fillStyle = g; ctx.fill();
-  });
-
-  // Umriss
-  ctx.beginPath();
-  c.forEach((p,i)=>{
-    const x = x0 + (p.gex/mx)*bandW*0.92, yy = y(p.s);
-    i ? ctx.lineTo(x,yy) : ctx.moveTo(x,yy);
-  });
-  ctx.strokeStyle = V("--ink-dim"); ctx.globalAlpha=.55;
-  ctx.lineWidth = 1.2; ctx.stroke(); ctx.globalAlpha=1;
-
-  // Mittelachse und Nullstelle
-  ctx.strokeStyle = V("--line"); ctx.globalAlpha=.8; ctx.lineWidth=1/dpr;
-  ctx.beginPath(); ctx.moveTo(snap(x0)+half(), topPad); ctx.lineTo(snap(x0)+half(), topPad+ph); ctx.stroke();
-  ctx.globalAlpha=1;
-  if(S.data.flip){
-    const yy = y(S.data.flip);
-    if(yy>topPad && yy<topPad+ph){
-      ctx.fillStyle = V("--pivot");
-      ctx.beginPath(); ctx.arc(x0, yy, 3.2, 0, 6.2832); ctx.fill();
-      ctx.globalAlpha=.35;
-      ctx.beginPath(); ctx.arc(x0, yy, 7, 0, 6.2832); ctx.fill();
-      ctx.globalAlpha=1;
-    }
-  }
-  ctx.restore();
-  ctx.font = "8px "+V("--mono"); ctx.fillStyle = V("--ink-faint");
-  ctx.textAlign = "center";
-  ctx.fillText("γ", x0, topPad + 9);
-  ctx.textAlign = "left";
 }
 
 function draw(){
@@ -884,11 +831,20 @@ function draw(){
       // Dicht liegende Kaesten nach unten ausweichen lassen, sonst
       // ueberdeckt der eine den anderen und beide sind unlesbar.
       let byB = yy, bx = profW, guard = 0;
-      while(usedBox.some(u=>Math.abs(u.y-byB)<25 && Math.abs(u.x-bx)<bw2+6) && guard++<8){
+      while(usedBox.some(u=>Math.abs(u.y-byB)<25 && Math.abs(u.x-bx)<bw2+6) && guard++<2){
         byB += 25;
       }
-      usedBox.push({y:byB, x:bx});
-      if(bx+bw2 < pw-30){
+      // Mehr als zwei Schritte Versatz waeren kein Ausweichen mehr,
+      // sondern ein Kasten ohne erkennbaren Bezug - dann lieber keiner.
+      // Die Preisskala rechts zeigt das Level ohnehin.
+      // Der Chart laeuft absichtlich unter der Chrome weiter - ein
+      // Beschriftungskasten dort waere aber unlesbar.
+      const safeTop = (S.immersive ? topPad : CHROME) + 18;
+      const fits = guard <= 2
+        && byB > safeTop && byB < topPad + ph - 6
+        && bx + bw2 < pw - 30;
+      if(fits) usedBox.push({y:byB, x:bx});
+      if(fits){
         // Verbinder, wenn der Kasten ausgewichen ist
         if(Math.abs(byB-yy) > 1){
           ctx.strokeStyle=c; ctx.globalAlpha=.4; ctx.lineWidth=1;
