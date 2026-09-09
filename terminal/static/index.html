@@ -57,7 +57,7 @@ body.immersive .topbar,body.immersive .strip,body.immersive .tabbar{
 }
 body.immersive .tabbar{--hide:110%}
 .strip.tucked{transform:translateY(calc(-100% - var(--topbar-h,62px)));opacity:0}
-.idbtn{display:flex;align-items:center;gap:5px;min-height:40px}
+.idbtn{display:flex;align-items:center;gap:5px;min-height:44px;padding-right:6px}
 .idbtn .nm{font-size:19px;font-weight:800;letter-spacing:-.02em}
 .idbtn .car{color:var(--ink-faint);font-size:11px;margin-top:2px}
 .price-wrap{margin-left:auto;text-align:right;line-height:1.2}
@@ -117,19 +117,27 @@ canvas{display:block;width:100%;height:100%}
   backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
 }
 .tfbar{
-  position:absolute;left:0;right:0;bottom:10px;display:flex;gap:6px;align-items:center;
-  padding:0 10px;overflow-x:auto;scrollbar-width:none;
+  position:absolute;left:0;right:0;bottom:8px;display:flex;gap:6px;align-items:center;
+  padding:0 10px;
 }
-.tfbar::-webkit-scrollbar{display:none}
+/* Zeitebenen duerfen scrollen, die Werkzeuge nicht: sonst rutschen sie auf
+   schmalen Geraeten aus dem Bild und sind nur per Wischen erreichbar. */
+.tfscroll{
+  flex:1 1 auto;min-width:0;display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;
+  -webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 22px),transparent 100%);
+  mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 22px),transparent 100%);
+}
+.tfscroll::-webkit-scrollbar{display:none}
+.tficons{flex:none;display:flex;gap:6px}
 .tfc{
-  flex:none;min-width:34px;height:34px;padding:0 8px;border-radius:10px;
+  flex:none;min-width:44px;height:44px;padding:0 10px;border-radius:12px;
   background:rgba(20,27,37,.92);border:1px solid var(--line);
   font-family:var(--mono);font-size:12px;font-weight:600;color:var(--ink-dim);
   display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px);
 }
 .tfc.on{background:var(--resist);border-color:var(--resist);color:#17130A}
-.tfc.icon{min-width:38px}
-.tfc.sp{margin-left:auto;flex:1;min-width:8px;border:none;background:none;pointer-events:none}
+.tfc.icon{min-width:44px}
+
 .cross{
   position:absolute;left:10px;top:10px;background:rgba(20,27,37,.95);border:1px solid var(--line);
   border-radius:9px;padding:7px 10px;font-family:var(--mono);font-size:11px;line-height:1.6;
@@ -243,7 +251,14 @@ canvas{display:block;width:100%;height:100%}
   max-height:82vh;overflow-y:auto;padding-bottom:calc(12px + var(--sb));
 }
 .sheet.on{transform:translateY(0)}
-.grab{width:38px;height:4px;border-radius:3px;background:var(--line);margin:9px auto 4px}
+.grabzone{padding:10px 0 6px;cursor:grab;touch-action:none}
+.grab{width:44px;height:5px;border-radius:3px;background:var(--line);margin:0 auto}
+.sh-head{display:flex;align-items:center;padding:0 18px 4px}
+.sh-close{
+  margin-left:auto;width:44px;height:44px;border-radius:22px;background:var(--panel-3);
+  border:1px solid var(--line);color:var(--ink-dim);font-size:15px;line-height:1;
+  display:flex;align-items:center;justify-content:center;
+}
 .sh-t{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
   color:var(--ink-faint);padding:8px 18px 4px}
 .si{display:flex;align-items:center;gap:13px;padding:15px 18px;min-height:56px;
@@ -341,7 +356,11 @@ canvas{display:block;width:100%;height:100%}
 </nav>
 
 <div class="scrim" id="scrim"></div>
-<div class="sheet" id="sheet"><div class="grab"></div><div id="sheetBody"></div></div>
+<div class="sheet" id="sheet">
+  <div class="grabzone" id="grabzone"><div class="grab"></div></div>
+  <div class="sh-head"><button class="sh-close" id="sheetClose" aria-label="Schließen">✕</button></div>
+  <div id="sheetBody"></div>
+</div>
 
 <script>
 "use strict";
@@ -429,7 +448,7 @@ async function loadPlan(){
 // ======================= Chart =======================
 const cv=$("cv"), ctx=cv.getContext("2d");
 let W=0,H=0,dpr=1;
-const PAD={r:56,b:56,t:6};
+const PAD={r:56,b:68,t:6};
 let CHROME=124;
 
 function measureChrome(){
@@ -975,11 +994,14 @@ function render(){
 }
 
 function renderTf(){
-  $("tfbar").innerHTML = TFS.map(t=>`<button class="tfc ${t===S.tf?"on":""}" data-t="${t}">${t}</button>`).join("")
-    + `<span class="tfc sp"></span>`
-    + `<button class="tfc icon" id="btnFull">${S.immersive?"◱":"◰"}</button>`
-    + `<button class="tfc icon" id="btnLayers">☰</button>`
-    + `<button class="tfc icon" id="btnFit">${S.fitAll?"⤡":"⤢"}</button>`;
+  $("tfbar").innerHTML =
+    `<div class="tfscroll">`
+    + TFS.map(t=>`<button class="tfc ${t===S.tf?"on":""}" data-t="${t}">${t}</button>`).join("")
+    + `</div><div class="tficons">`
+    + `<button class="tfc icon" id="btnFull" aria-label="Vollbild">${S.immersive?"◱":"◰"}</button>`
+    + `<button class="tfc icon" id="btnLayers" aria-label="Struktur">☰</button>`
+    + `<button class="tfc icon" id="btnFit" aria-label="Zoom">${S.fitAll?"⤡":"⤢"}</button>`
+    + `</div>`;
   $("tfbar").querySelectorAll("[data-t]").forEach(b=>b.onclick=()=>{
     S.tf=b.dataset.t; S.view0=false; buzz(8); load();
   });
@@ -1238,6 +1260,33 @@ track.addEventListener("scroll",()=>{
 function openSheet(html){ $("sheetBody").innerHTML=html; $("sheet").classList.add("on"); $("scrim").classList.add("on"); }
 function closeSheet(){ $("sheet").classList.remove("on"); $("scrim").classList.remove("on"); }
 $("scrim").onclick=closeSheet;
+$("sheetClose").onclick=closeSheet;
+
+// Nach unten wischen schliesst - auf einem Telefon die erwartete Geste,
+// und der einzige verlaessliche Weg, wenn das Sheet fast den ganzen
+// Bildschirm fuellt und "daneben tippen" kaum Flaeche laesst.
+(function(){
+  const sh=$("sheet"); let y0=null;
+  const zone=$("grabzone");
+  const start=e=>{ y0=e.touches[0].clientY; sh.style.transition="none"; };
+  const move=e=>{
+    if(y0==null) return;
+    const dy=Math.max(0, e.touches[0].clientY-y0);
+    sh.style.transform=`translateY(${dy}px)`;
+  };
+  const end=e=>{
+    if(y0==null) return;
+    const dy=Math.max(0,(e.changedTouches[0]?.clientY??y0)-y0);
+    sh.style.transition=""; sh.style.transform="";
+    if(dy>70){ buzz(8); closeSheet(); }
+    y0=null;
+  };
+  [zone, sh].forEach(el=>{
+    el.addEventListener("touchstart",start,{passive:true});
+    el.addEventListener("touchmove",move,{passive:true});
+    el.addEventListener("touchend",end,{passive:true});
+  });
+})();
 
 $("idbtn").onclick=()=>{
   const src=S.overview.length?S.overview:Object.keys(SYM).map(k=>({key:k,name:k}));

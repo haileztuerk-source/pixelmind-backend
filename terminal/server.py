@@ -39,6 +39,19 @@ def _touch(key):
         _active[key] = time.time()
 
 
+def _market_arg():
+    """Marktschluessel aus der Anfrage, geprueft.
+
+    Vorher wies nur /api/state unbekannte Maerkte ab; die uebrigen
+    Endpunkte lieferten stillschweigend die Standardwerte - ein Tippfehler
+    im Symbol sah dann aus wie ein Ergebnis.
+    """
+    key = request.args.get("market", market.DEFAULT_MARKET)
+    if key not in market.MARKETS:
+        return None
+    return key
+
+
 def _active_markets():
     now = time.time()
     with _lock:
@@ -184,8 +197,8 @@ def markets():
 
 @app.route("/api/state")
 def state():
-    key = request.args.get("market", market.DEFAULT_MARKET)
-    if key not in market.MARKETS:
+    key = _market_arg()
+    if not key:
         return jsonify({"error": "unbekannter Markt"}), 400
     interval = request.args.get("tf", "15m")
     if interval not in market.INTERVALS:
@@ -199,7 +212,9 @@ def state():
 
 @app.route("/api/candles")
 def candles():
-    key = request.args.get("market", market.DEFAULT_MARKET)
+    key = _market_arg()
+    if not key:
+        return jsonify({"error": "unbekannter Markt"}), 400
     interval = request.args.get("tf", "15m")
     bars, src = market.bars(key, interval)
     return jsonify({"bars": bars, "source": src})
@@ -234,20 +249,26 @@ def trails():
     Bewusst ein eigener Endpunkt: der Verlauf waechst ueber den Tag und
     hat in der 20-Sekunden-Abfrage des Zustands nichts verloren.
     """
-    key = request.args.get("market", market.DEFAULT_MARKET)
+    key = _market_arg()
+    if not key:
+        return jsonify({"error": "unbekannter Markt"}), 400
     _touch(key)
     return jsonify(TRAIL.series(key))
 
 
 @app.route("/api/book")
 def book():
-    key = request.args.get("market", market.DEFAULT_MARKET)
+    key = _market_arg()
+    if not key:
+        return jsonify({"error": "unbekannter Markt"}), 400
     return jsonify(BOOK.view(key, snapshot(key)))
 
 
 @app.route("/api/agent/messages")
 def agent_messages():
-    key = request.args.get("market", market.DEFAULT_MARKET)
+    key = _market_arg()
+    if not key:
+        return jsonify({"error": "unbekannter Markt"}), 400
     _touch(key)
     return jsonify({"messages": AGENT.messages(key), "budget": AGENT.budget()})
 
@@ -256,6 +277,8 @@ def agent_messages():
 def agent_chat():
     data = request.get_json(silent=True) or {}
     key = data.get("market", market.DEFAULT_MARKET)
+    if key not in market.MARKETS:
+        return jsonify({"error": "unbekannter Markt"}), 400
     text = (data.get("text") or "").strip()
     if not text:
         return jsonify({"error": "leere Frage"}), 400
@@ -265,7 +288,9 @@ def agent_chat():
 
 @app.route("/api/agent/plan")
 def agent_plan():
-    key = request.args.get("market", market.DEFAULT_MARKET)
+    key = _market_arg()
+    if not key:
+        return jsonify({"error": "unbekannter Markt"}), 400
     plan = AGENT.get_plan(key)
     if not plan or request.args.get("force") == "1":
         plan = AGENT.plan(key, snapshot(key), force=True)
