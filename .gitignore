@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.env
+terminal_agent_state.json
+terminal_agent_state.json.tmp
+terminal_analysis.json
