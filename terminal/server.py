@@ -125,7 +125,8 @@ def build_snapshot(key, interval="15m"):
     snap["leading_walls"] = lw["walls"]
     snap["chain_ratios"] = lw["ratios"]
     snap["wall_confluence"] = walls.confluence(lw["walls"], max(atr_v * 0.28, 1))
-    TRAIL.record(key, lw["walls"], spot)
+    # Mit der Uhr des Charts stempeln, damit Orbs und Kerzen zusammenpassen.
+    TRAIL.record(key, lw["walls"], spot, ts=(bars[-1]["t"] if bars else None))
 
     # Zonenbuch zuletzt: es friert die Gamma-Felder ein, die erst oben
     # gesetzt wurden. Erst dadurch sind die Waende ueber den Tag hinweg

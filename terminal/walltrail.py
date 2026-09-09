@@ -55,14 +55,20 @@ class WallTrail:
         return self._cache[market]
 
     # ------------------------------------------------------------ schreiben
-    def record(self, market, walls, spot=None):
-        """Haengt den aktuellen Stand an die Spuren an."""
+    def record(self, market, walls, spot=None, ts=None):
+        """Haengt den aktuellen Stand an die Spuren an.
+
+        `ts` ist die Uhr des Charts, nicht die Wanduhr. Der Cboe-Feed
+        haengt gemessene 15 Minuten zurueck; wuerde hier die reale
+        Uhrzeit gestempelt, laegen die Orb-Ketten eine Viertelstunde
+        rechts neben den Kerzen, zu denen sie gehoeren.
+        """
         if not walls:
             return
         with self.lock:
             st = self._state(market)
-            b = _bucket()
-            cutoff = time.time() - KEEP_HOURS * 3600
+            b = _bucket(ts)
+            cutoff = (ts or time.time()) - KEEP_HOURS * 3600
             changed = False
 
             for w in walls:
@@ -102,7 +108,10 @@ class WallTrail:
         """Spuren fuer die Darstellung: je Spur Punkte mit Zeit und Staerke."""
         with self.lock:
             st = self._state(market)
-            b = _bucket()
+            # Frische gegen die juengste aufgezeichnete Stuetzstelle messen,
+            # nicht gegen die Wanduhr - sonst gilt der gesamte Verlauf als
+            # veraltet, sobald der Feed nachhinkt.
+            b = max((tr.get("last", 0) for tr in st["tracks"].values()), default=0)
             out = []
             peak = 0.0
             for tid, tr in st["tracks"].items():
