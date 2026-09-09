@@ -40,9 +40,23 @@ button{font:inherit;color:inherit;background:none;border:none;padding:0;cursor:p
 
 /* ============ Kopfzeile ============ */
 .topbar{
-  flex:none;padding:calc(var(--st) + 9px) 14px 9px;display:flex;align-items:center;gap:11px;
-  background:var(--ground);border-bottom:1px solid var(--line-soft);
+  position:fixed;top:0;left:0;right:0;z-index:32;
+  padding:calc(var(--st) + 9px) 14px 9px;display:flex;align-items:center;gap:11px;
+  background:color-mix(in srgb, var(--ground) 82%, transparent);
+  backdrop-filter:blur(16px) saturate(1.3);-webkit-backdrop-filter:blur(16px) saturate(1.3);
+  transition:transform .24s cubic-bezier(.32,.72,0,1), opacity .2s ease;
 }
+/* Verlauf unter der Chrome: der Chart laeuft darunter weiter und bleibt
+   trotzdem lesbar - dieselbe Loesung wie in Vollbild-Feeds. */
+.topbar::after{
+  content:"";position:absolute;left:0;right:0;top:100%;height:22px;pointer-events:none;
+  background:linear-gradient(color-mix(in srgb,var(--ground) 70%,transparent), transparent);
+}
+body.immersive .topbar,body.immersive .strip,body.immersive .tabbar{
+  transform:translateY(var(--hide,-110%));opacity:0;pointer-events:none;
+}
+body.immersive .tabbar{--hide:110%}
+.strip.tucked{transform:translateY(calc(-100% - var(--topbar-h,62px)));opacity:0}
 .idbtn{display:flex;align-items:center;gap:5px;min-height:40px}
 .idbtn .nm{font-size:19px;font-weight:800;letter-spacing:-.02em}
 .idbtn .car{color:var(--ink-faint);font-size:11px;margin-top:2px}
@@ -61,8 +75,11 @@ button{font:inherit;color:inherit;background:none;border:none;padding:0;cursor:p
 
 /* ============ Marktleiste ============ */
 .strip{
-  flex:none;display:flex;gap:8px;padding:9px 14px;overflow-x:auto;scrollbar-width:none;
-  background:var(--ground);border-bottom:1px solid var(--line-soft);
+  position:fixed;top:var(--topbar-h,62px);left:0;right:0;z-index:31;
+  display:flex;gap:8px;padding:9px 14px;overflow-x:auto;scrollbar-width:none;
+  background:color-mix(in srgb, var(--ground) 76%, transparent);
+  backdrop-filter:blur(16px) saturate(1.3);-webkit-backdrop-filter:blur(16px) saturate(1.3);
+  transition:transform .28s cubic-bezier(.32,.72,0,1), opacity .2s ease;
 }
 .strip::-webkit-scrollbar{display:none}
 .mchip{
@@ -87,29 +104,32 @@ button{font:inherit;color:inherit;background:none;border:none;padding:0;cursor:p
   -webkit-overflow-scrolling:touch;position:relative;
 }
 .view.chart{overflow:hidden}
-.pad{padding:14px 14px calc(20px + var(--sb))}
+.pad{padding:calc(var(--chrome-h,124px) + 12px) 14px calc(20px + var(--sb))}
 
 /* Chart */
 .cvwrap{position:absolute;inset:0;touch-action:none}
 canvas{display:block;width:100%;height:100%}
 .meta{
-  position:absolute;left:8px;top:8px;font-family:var(--mono);font-size:9.5px;
-  color:var(--ink-dim);line-height:1.55;pointer-events:none;
-  background:color-mix(in srgb, var(--ground) 76%, transparent);
-  border:1px solid var(--line-soft);border-radius:8px;padding:5px 9px;
+  position:absolute;left:8px;top:calc(var(--chrome-h,124px) + 6px);font-family:var(--mono);font-size:9.5px;
+  color:var(--ink-faint);line-height:1.4;pointer-events:none;white-space:nowrap;
+  background:color-mix(in srgb, var(--ground) 62%, transparent);
+  border:1px solid var(--line-soft);border-radius:7px;padding:3px 8px;font-size:9px;
   backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
 }
 .tfbar{
-  position:absolute;left:10px;right:10px;bottom:10px;display:flex;gap:6px;align-items:center;
+  position:absolute;left:0;right:0;bottom:10px;display:flex;gap:6px;align-items:center;
+  padding:0 10px;overflow-x:auto;scrollbar-width:none;
 }
+.tfbar::-webkit-scrollbar{display:none}
 .tfc{
-  flex:none;min-width:40px;height:34px;padding:0 11px;border-radius:10px;
+  flex:none;min-width:34px;height:34px;padding:0 8px;border-radius:10px;
   background:rgba(20,27,37,.92);border:1px solid var(--line);
   font-family:var(--mono);font-size:12px;font-weight:600;color:var(--ink-dim);
   display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px);
 }
 .tfc.on{background:var(--resist);border-color:var(--resist);color:#17130A}
-.tfc.icon{margin-left:auto;min-width:38px}
+.tfc.icon{min-width:38px}
+.tfc.sp{margin-left:auto;flex:1;min-width:8px;border:none;background:none;pointer-events:none}
 .cross{
   position:absolute;left:10px;top:10px;background:rgba(20,27,37,.95);border:1px solid var(--line);
   border-radius:9px;padding:7px 10px;font-family:var(--mono);font-size:11px;line-height:1.6;
@@ -284,7 +304,7 @@ canvas{display:block;width:100%;height:100%}
 </head>
 <body>
 
-<header class="topbar">
+<header class="topbar" id="topbar">
   <button class="idbtn" id="idbtn">
     <span class="nm" id="sym">NDX</span><span class="car">▾</span>
   </button>
@@ -329,7 +349,7 @@ canvas{display:block;width:100%;height:100%}
 const S = {
   market:"NQ", tf:"15m", data:null, plan:null, messages:[], overview:[],
   view:0, layers:{gcurve:false, orbs:true, fix:true, live:true, zonen:true, profil:true, session:true},
-  fitAll:false, lastMsgCount:0, busy:false, cross:null, trails:null,
+  fitAll:false, immersive:false, lastMsgCount:0, busy:false, cross:null, trails:null,
 };
 const TFS = ["1m","5m","15m","30m","1h","1d"];
 const SYM = {NQ:"NDX", ES:"SPX", YM:"DJX", RTY:"RUT", GC:"GLD"};
@@ -410,8 +430,18 @@ async function loadPlan(){
 const cv=$("cv"), ctx=cv.getContext("2d");
 let W=0,H=0,dpr=1;
 const PAD={r:56,b:56,t:6};
+let CHROME=124;
+
+function measureChrome(){
+  const tb = $("topbar")?.offsetHeight || 62;
+  const st = $("strip")?.offsetHeight || 62;
+  CHROME = tb + st;
+  document.documentElement.style.setProperty("--topbar-h", tb+"px");
+  document.documentElement.style.setProperty("--chrome-h", CHROME+"px");
+}
 
 function resize(){
+  measureChrome();
   const w=$("cvwrap");
   // Bis Faktor 3 statt 2: ein iPhone Pro zeichnet damit auf dem echten
   // Panelraster statt auf zwei Dritteln davon.
@@ -510,6 +540,65 @@ function tToX(ts, bars, bw){
   return (lo + (ts - bars[lo].t)/span)*bw + bw/2;
 }
 
+/** Volumenprofil, zweigeteilt nach gehandelter Optionsseite.
+
+    Cboe liefert je Minute getrennt Call- und Put-Volumen. Ein Preisband,
+    an dem fast nur Puts liefen, bedeutet etwas anderes als eines mit
+    ueberwiegend Calls - auch wenn die Gesamtsumme dieselbe ist. Deshalb
+    faerbt sich jeder Balken zwischen Tuerkis (Put-lastig) und Gold
+    (Call-lastig) ein, statt einheitlich grau zu bleiben.
+
+    Dazu markiert: Value Area, POC, Volumenknoten und Vakuum-Zonen. */
+function drawProfile(ctx, y, pw, ph, topPad, V){
+  const vp = S.data.vp;
+  const maxW = Math.min(pw*0.19, 74);
+  const rowH = Math.max(1.1, ph / (vp.bins_n || 180));
+  const gold = [217,164,65], teal = [63,167,158], flat = [92,106,124];
+
+  // Value Area als ruhiger Grund hinter dem Profil
+  if(vp.val && vp.vah){
+    const y1=y(vp.vah), y2=y(vp.val);
+    ctx.fillStyle="rgba(217,164,65,.035)";
+    ctx.fillRect(0, Math.min(y1,y2), maxW, Math.abs(y2-y1));
+  }
+
+  vp.bins.forEach(b=>{
+    const yy = y(b.p);
+    if(yy < topPad-1 || yy > topPad+ph+1 || b.w <= 0.004) return;
+    // Zwischen den Rollenfarben mischen; 0,5 bleibt neutral
+    const t = (b.c - 0.5) * 2;                       // -1 Put .. +1 Call
+    const to = t >= 0 ? gold : teal, k = Math.abs(t);
+    const rgb = flat.map((f,i)=> Math.round(f + (to[i]-f)*k));
+    ctx.fillStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${b.va?0.50:0.24})`;
+    ctx.fillRect(0, snap(yy - rowH/2), maxW*b.w, Math.max(0.8, rowH));
+  });
+
+  // POC: die Zeile, an der am meisten umging
+  if(vp.poc){
+    const yy = snap(y(vp.poc))+half();
+    ctx.strokeStyle=V("--pivot"); ctx.lineWidth=1.4; ctx.globalAlpha=.95;
+    ctx.beginPath(); ctx.moveTo(0,yy); ctx.lineTo(maxW+10,yy); ctx.stroke();
+    ctx.globalAlpha=1;
+    ctx.font="8px "+V("--mono"); ctx.fillStyle=V("--pivot"); ctx.textAlign="left";
+    ctx.fillText("POC", maxW+13, yy+3);
+  }
+  // Knoten und Vakuum am linken Rand markieren
+  (vp.hvn||[]).forEach(n=>{
+    const yy=snap(y(n.p))+half();
+    if(yy<topPad||yy>topPad+ph) return;
+    ctx.strokeStyle=V("--ink-dim"); ctx.globalAlpha=.7; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(0,yy); ctx.lineTo(7,yy); ctx.stroke(); ctx.globalAlpha=1;
+  });
+  (vp.lvn||[]).forEach(n=>{
+    const yy=snap(y(n.p))+half();
+    if(yy<topPad||yy>topPad+ph) return;
+    ctx.strokeStyle=V("--warn"); ctx.globalAlpha=.55; ctx.lineWidth=1;
+    ctx.setLineDash([2,3]);
+    ctx.beginPath(); ctx.moveTo(0,yy); ctx.lineTo(maxW*0.5,yy); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha=1;
+  });
+}
+
 /** Vorgezeichnete Orbs mit Leuchtkern.
 
     Ein radialer Verlauf je Punkt waere bei ueber tausend Orbs zu teuer.
@@ -546,7 +635,7 @@ function orbSprite(color, r){
 /** Wand-Verlauf als Orb-Ketten: x = Zeit, y = Preis, Radius = Bestand.
     Eine Linie sagt, wo die Wand liegt. Die Kette sagt zusaetzlich, ob
     sie waechst oder zerfaellt. */
-function drawOrbs(ctx, bars, y, bw, pw, ph, V){
+function drawOrbs(ctx, bars, y, bw, pw, ph, V, topPad){
   const tr = S.trails;
   if(!tr || !(tr.tracks||[]).length) return;
   const peak = tr.peak_oi || 1;
@@ -582,7 +671,7 @@ function drawOrbs(ctx, bars, y, bw, pw, ph, V){
     Gamma am groessten ist - das klebt am Geld - sondern wo es sein
     Vorzeichen wechselt. Oberhalb daempfen Dealer, unterhalb verstaerken
     sie. Genau diese Nullstelle ist das Zero-Gamma-Level. */
-function drawGammaCurve(ctx, y, pw, ph, V, lo, hi){
+function drawGammaCurve(ctx, y, pw, ph, V, lo, hi, topPad){
   const c = S.data?.curve;
   if(!c || c.length < 4) return;
   // Die Kurve spannt sechs Prozent um den Spot. Zeigt der Chart nur ein
@@ -596,7 +685,7 @@ function drawGammaCurve(ctx, y, pw, ph, V, lo, hi){
   const mx = Math.max(...c.map(p=>Math.abs(p.gex))) || 1;
   const pos = V("--support"), neg = V("--warn");
   ctx.save();
-  ctx.beginPath(); ctx.rect(x0 - bandW, PAD.t, bandW*2, ph); ctx.clip();
+  ctx.beginPath(); ctx.rect(x0 - bandW, topPad, bandW*2, ph); ctx.clip();
 
   // Flaeche, in zwei Haelften nach Vorzeichen
   [1,-1].forEach(sign=>{
@@ -625,11 +714,11 @@ function drawGammaCurve(ctx, y, pw, ph, V, lo, hi){
 
   // Mittelachse und Nullstelle
   ctx.strokeStyle = V("--line"); ctx.globalAlpha=.8; ctx.lineWidth=1/dpr;
-  ctx.beginPath(); ctx.moveTo(snap(x0)+half(), PAD.t); ctx.lineTo(snap(x0)+half(), PAD.t+ph); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(snap(x0)+half(), topPad); ctx.lineTo(snap(x0)+half(), topPad+ph); ctx.stroke();
   ctx.globalAlpha=1;
   if(S.data.flip){
     const yy = y(S.data.flip);
-    if(yy>PAD.t && yy<PAD.t+ph){
+    if(yy>topPad && yy<topPad+ph){
       ctx.fillStyle = V("--pivot");
       ctx.beginPath(); ctx.arc(x0, yy, 3.2, 0, 6.2832); ctx.fill();
       ctx.globalAlpha=.35;
@@ -640,7 +729,7 @@ function drawGammaCurve(ctx, y, pw, ph, V, lo, hi){
   ctx.restore();
   ctx.font = "8px "+V("--mono"); ctx.fillStyle = V("--ink-faint");
   ctx.textAlign = "center";
-  ctx.fillText("γ", x0, PAD.t + 9);
+  ctx.fillText("γ", x0, topPad + 9);
   ctx.textAlign = "left";
 }
 
@@ -658,33 +747,35 @@ function draw(){
     ctx.fillStyle=V("--ink-faint"); ctx.font="13px "+V("--sans"); ctx.textAlign="center";
     ctx.fillText("keine Kursdaten", W/2, H/2); return;
   }
-  const pw=W-PAD.r, ph=H-PAD.b-PAD.t;
+  const topPad = PAD.t + (S.immersive ? 6 : CHROME*0.42);
+  const pw=W-PAD.r, ph=H-PAD.b-topPad;
   let lo=Math.min(...bars.map(b=>b.l)), hi=Math.max(...bars.map(b=>b.h));
   const lv=chartLevels(), range=(hi-lo)||1;
   const slack = S.fitAll ? Infinity : range*0.45;
   const loL=lo-slack, hiL=hi+slack;
+  const barLo=lo, barHi=hi, barRange=(barHi-barLo)||1;
   lv.forEach(l=>{ if(l.p>=loL&&l.p<=hiL){ lo=Math.min(lo,l.p); hi=Math.max(hi,l.p); }});
   if(S.data.spot){ lo=Math.min(lo,S.data.spot); hi=Math.max(hi,S.data.spot); }
-  const pd=(hi-lo)*0.06||1; lo-=pd; hi+=pd;
-  const y=p=>PAD.t+(hi-p)/(hi-lo)*ph, bw=pw/bars.length;
-
-  if(S.layers.profil && S.data.vp?.bins){
-    const mw=pw*0.10;
-    S.data.vp.bins.forEach(b=>{
-      const yy=y(b.p); if(yy<PAD.t||yy>PAD.t+ph) return;
-      const va=S.data.vp.val && b.p>=S.data.vp.val && b.p<=S.data.vp.vah;
-      ctx.fillStyle = va?"rgba(217,164,65,.20)":"rgba(78,93,112,.30)";
-      ctx.fillRect(0,yy-1.3,mw*b.w,2.6);
-    });
+  // Harte Klemme statt Schwellenwert: ein Level darf die Skala um
+  // hoechstens ein Viertel der Kerzenspanne je Seite aufziehen. Damit
+  // gehoeren den Kerzen immer mindestens zwei Drittel des Bildes, und
+  // was weiter weg liegt, sagt die Randmarke.
+  if(!S.fitAll){
+    lo = Math.max(lo, barLo - barRange*0.25);
+    hi = Math.min(hi, barHi + barRange*0.25);
   }
+  const pd=(hi-lo)*0.06||1; lo-=pd; hi+=pd;
+  const y=p=>topPad+(hi-p)/(hi-lo)*ph, bw=pw/bars.length;
+
+  if(S.layers.profil && S.data.vp?.bins) drawProfile(ctx, y, pw, ph, topPad, V);
   if(S.layers.zonen) (S.data.zones||[]).forEach(z=>{
     const y1=y(z.top),y2=y(z.bot);
     const c = z.role==="resist"?"217,164,65" : z.role==="support"?"63,167,158" : "201,194,174";
     ctx.fillStyle=`rgba(${c},.075)`; ctx.fillRect(0,y1,pw,Math.max(1.5,y2-y1));
   });
 
-  if(S.layers.gcurve) drawGammaCurve(ctx, y, pw, ph, V, lo, hi);
-  if(S.layers.orbs) drawOrbs(ctx, bars, y, bw, pw, ph, V);
+  if(S.layers.gcurve) drawGammaCurve(ctx, y, pw, ph, V, lo, hi, topPad);
+  if(S.layers.orbs) drawOrbs(ctx, bars, y, bw, pw, ph, V, topPad);
 
   const upC=V("--up"), dnC=V("--down");
   bars.forEach((b,i)=>{
@@ -708,7 +799,7 @@ function draw(){
 
   const used=[];
   lv.sort((a,b)=>a.p-b.p).forEach(l=>{
-    const yy=y(l.p); if(yy<PAD.t-2||yy>PAD.t+ph+2) return;
+    const yy=y(l.p); if(yy<topPad-2||yy>topPad+ph+2) return;
     const c=V(l.c);
     ctx.globalAlpha=l.dim??1; ctx.strokeStyle=c; ctx.lineWidth=l.w; ctx.setLineDash(l.dash||[]);
     const ly = snap(yy)+half();
@@ -737,7 +828,7 @@ function draw(){
     [[above,1],[below,-1]].forEach(([list,dir])=>{
       list.forEach((l,i)=>{
         const c=V(l.c);
-        const yy = dir>0 ? PAD.t+7+i*13 : PAD.t+ph-7-i*13;
+        const yy = dir>0 ? topPad+7+i*13 : topPad+ph-7-i*13;
         const txt = (dir>0?"▲ ":"▼ ")+fmt(l.p);
         const w = ctx.measureText(txt).width+9;
         ctx.globalAlpha=.92; ctx.fillStyle=c;
@@ -755,7 +846,7 @@ function draw(){
 
   if(S.data.spot){
     const yy=y(S.data.spot);
-    if(yy>=PAD.t&&yy<=PAD.t+ph){
+    if(yy>=topPad&&yy<=topPad+ph){
       ctx.strokeStyle=V("--ink"); ctx.globalAlpha=.45; ctx.setLineDash([4,3]);
       const sy=snap(yy)+half();
       ctx.beginPath(); ctx.moveTo(0,sy); ctx.lineTo(pw,sy); ctx.stroke();
@@ -769,7 +860,7 @@ function draw(){
     const i=Math.max(0,Math.min(bars.length-1,S.cross));
     const b=bars[i], x=i*bw+bw/2;
     ctx.strokeStyle=V("--ink-dim"); ctx.globalAlpha=.5; ctx.setLineDash([2,3]);
-    ctx.beginPath(); ctx.moveTo(x,PAD.t); ctx.lineTo(x,PAD.t+ph); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x,topPad); ctx.lineTo(x,topPad+ph); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(0,y(b.c)); ctx.lineTo(pw,y(b.c)); ctx.stroke();
     ctx.setLineDash([]); ctx.globalAlpha=1;
     $("cross").className="cross on";
@@ -782,7 +873,7 @@ function draw(){
                                        W*0.45, H*0.45, Math.max(W,H)*0.78);
   vig.addColorStop(0, "rgba(0,0,0,0)");
   vig.addColorStop(1, "rgba(0,0,0,0.30)");
-  ctx.fillStyle = vig; ctx.fillRect(0,0,pw,PAD.t+ph);
+  ctx.fillStyle = vig; ctx.fillRect(0,0,pw,topPad+ph);
 
   ctx.fillStyle=V("--ink-faint"); ctx.font="9px "+V("--mono");
   const st=Math.max(1,Math.floor(bars.length/4));
@@ -798,9 +889,20 @@ function draw(){
 }
 
 // Gesten
-let drag=null,pinch=null,press=null;
+let drag=null,pinch=null,press=null,tuckTimer=null;
 const wrap=$("cvwrap");
+
+/** Marktleiste waehrend der Geste einklappen und danach zurueckholen -
+    dieselbe Mechanik, mit der Feed-Apps beim Scrollen Platz schaffen. */
+function tuck(on){
+  const st=$("strip");
+  if(!st) return;
+  clearTimeout(tuckTimer);
+  if(on){ st.classList.add("tucked"); }
+  else tuckTimer = setTimeout(()=>st.classList.remove("tucked"), 1300);
+}
 wrap.addEventListener("touchstart",e=>{
+  tuck(true);
   if(e.touches.length===1){
     drag={x:e.touches[0].clientX, i0:S.vw?.i0||0, t:Date.now(), moved:false};
     press=setTimeout(()=>{ // langes Drücken blendet das Fadenkreuz ein
@@ -838,6 +940,7 @@ wrap.addEventListener("touchmove",e=>{
   }
 },{passive:true});
 wrap.addEventListener("touchend",()=>{
+  tuck(false);
   clearTimeout(press);
   if(S.cross!=null){ S.cross=null; draw(); }
   drag=null; pinch=null;
@@ -865,22 +968,27 @@ function render(){
     d.regime==="long"?"LONG γ" : d.regime==="short"?"SHORT γ" : "—";
   const stale = d.chain_stale || d.bar_source?.stale;
   $("meta").innerHTML =
-    `${d.bar_source?.source==="cboe"?"Cboe":"Yahoo"} · ${stale?"STALE":"live"} · ${d.delayed_minutes} Min verzögert<br>`+
-    `ATR ${fmt(d.atr)} · ${d.bars.length} Kerzen · ${hhmm(d.ts)}` +
-    (S.layers.orbs && S.trails?.tracks?.length
-      ? `<br>Orbs: ${S.trails.tracks.length} Wandspuren · Größe = Open Interest`
-      : "");
+    `${d.bar_source?.source==="cboe"?"Cboe":"Yahoo"}${stale?" · STALE":""} · ATR ${fmt(d.atr)} · `+
+    `${d.bars.length} Kerzen${S.trails?.tracks?.length && S.layers.orbs
+      ? " · "+S.trails.tracks.length+" Spuren" : ""} · ${hhmm(d.ts)}`;
   renderTf(); renderStrip(); renderLevel(); renderGamma(); draw();
 }
 
 function renderTf(){
   $("tfbar").innerHTML = TFS.map(t=>`<button class="tfc ${t===S.tf?"on":""}" data-t="${t}">${t}</button>`).join("")
+    + `<span class="tfc sp"></span>`
+    + `<button class="tfc icon" id="btnFull">${S.immersive?"◱":"◰"}</button>`
     + `<button class="tfc icon" id="btnLayers">☰</button>`
     + `<button class="tfc icon" id="btnFit">${S.fitAll?"⤡":"⤢"}</button>`;
   $("tfbar").querySelectorAll("[data-t]").forEach(b=>b.onclick=()=>{
     S.tf=b.dataset.t; S.view0=false; buzz(8); load();
   });
   $("btnFit").onclick=()=>{ S.fitAll=!S.fitAll; buzz(8); renderTf(); draw(); };
+  $("btnFull").onclick=()=>{
+    S.immersive=!S.immersive;
+    document.body.classList.toggle("immersive", S.immersive);
+    buzz(10); renderTf(); setTimeout(()=>{ resize(); }, 260);
+  };
   $("btnLayers").onclick=layerSheet;
 }
 
@@ -896,6 +1004,9 @@ function renderStrip(){
         m.change_pct==null?"—":(m.change_pct>=0?"+":"")+m.change_pct.toFixed(2)+"%"}</div>
     </button>`).join("");
   el.querySelectorAll("[data-m]").forEach(b=>b.onclick=()=>switchMarket(b.dataset.m));
+  // Erst jetzt steht die Leiste - vorher gemessen waere sie leer und der
+  // Chart begaenne unter der Kopfzeile statt darunter.
+  measureChrome(); draw();
 }
 
 function switchMarket(k){

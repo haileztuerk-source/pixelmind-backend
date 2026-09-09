@@ -67,6 +67,22 @@ uebernimmt die Mechanik aus `_zone_day_book()`:
 - **Qualitaetssperre**: ist die Kette faul, bleibt das alte Buch stehen,
   statt ein neues zu wuerfeln.
 
+## Volumenprofil
+
+180 Bins statt 90, und zweigeteilt: Cboe liefert je Minute getrennt
+Call- und Put-Volumen. Ein Preisband, an dem fast nur Puts liefen,
+bedeutet etwas anderes als eines mit ueberwiegend Calls - auch bei
+gleicher Summe. Jeder Balken faerbt sich deshalb zwischen Tuerkis
+(Put-lastig) und Gold (Call-lastig), statt einheitlich grau zu bleiben.
+
+Gemessen am POC einer Sitzung: **37 Prozent Call gegen 63 Prozent Put** -
+an dieser Marke wurde ueberwiegend auf der Put-Seite gehandelt.
+
+Dazu markiert: Value Area als Grund, POC als Linie mit Beschriftung,
+HVN-Knoten als Strich am linken Rand, LVN-Vakuum gestrichelt. Knoten
+sind lokale Maxima ueber dem 1,4-fachen Mittel, Vakuum lokale Minima
+unter dem 0,45-fachen.
+
 ## Leading Walls und Orb-Ketten
 
 Ein Index hat zwei Ketten, die dieselbe Sache meinen: NDX und QQQ, SPX
@@ -111,6 +127,26 @@ zwei Prozent entfernt die Kerzen zu einem Strich.
 - Kerzenkoerper mit leichtem Verlauf, Grund mit Verlauf, Vignette an den
   Raendern - Tiefe ohne eine zweite Farbe.
 - Kurse zaehlen weich auf den neuen Wert, statt zu springen.
+
+## Platz fuer den Chart
+
+Gestapelte Leisten kosteten 180 von 844 Punkten - ein Fuenftel des
+Bildschirms. Kopfzeile und Marktleiste schweben jetzt ueber dem Chart
+statt ihn nach unten zu druecken, mit Weichzeichner und Verlauf
+darunter, damit er lesbar bleibt. **Der Chart nimmt 93 statt 56 Prozent
+der Bildhoehe ein.**
+
+Dazu zwei Mechaniken aus Feed-Apps:
+
+- **Einklappen bei Beruehrung.** Waehrend einer Geste faehrt die
+  Marktleiste hoch und kommt 1,3 Sekunden danach zurueck.
+- **Vollbild** ueber den Knopf in der Zeitebenen-Leiste: Kopfzeile,
+  Marktleiste und Navigation verschwinden, der Chart bekommt alles.
+
+Die Preisskala ist hart geklemmt: ein Level darf sie um hoechstens ein
+Viertel der Kerzenspanne je Seite aufziehen. Damit gehoeren den Kerzen
+immer mindestens zwei Drittel des Bildes; was weiter weg liegt, sagt
+die Randmarke.
 
 ## Bedienung
 

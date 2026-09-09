@@ -152,12 +152,20 @@ def atr(bars, period=14):
     return sum(window) / len(window) if window else 0.0
 
 
-def volume_profile(bars, bins=90):
-    """Volumenprofil ueber die uebergebenen Bars.
+def volume_profile(bars, bins=180):
+    """Volumenprofil mit Seitenaufteilung und Knotenerkennung.
 
-    Gibt POC, Value-Area-Grenzen (70 % des Volumens) und die Bins zurueck.
-    Die Bins gehen ins Frontend als schmaler Streifen hinter den Kerzen -
-    so wie im Redesign-Vorschlag, nicht als deckende Flaeche darueber.
+    Deutlich feiner aufgeloest als ein blosser Streifen, und zweigeteilt:
+    Cboe liefert je Minute getrennt Call- und Put-Volumen, und dieser
+    Unterschied ist die eigentliche Aussage - ein Preisband, an dem fast
+    nur Puts gehandelt wurden, bedeutet etwas anderes als eines mit
+    ueberwiegend Calls, auch wenn die Gesamtsumme gleich ist.
+
+    Zusaetzlich markiert:
+      HVN  Volumenknoten - der Kurs hat hier Zeit verbracht, Reaktionen
+           sind wahrscheinlich
+      LVN  Vakuum zwischen zwei Knoten - hier laeuft der Kurs schnell
+           durch, das sind die Zielkandidaten
     """
     if not bars:
         return {}
@@ -166,42 +174,74 @@ def volume_profile(bars, bins=90):
     if hi <= lo:
         return {}
     step = (hi - lo) / bins
-    hist = [0.0] * bins
+    tot = [0.0] * bins
+    call = [0.0] * bins
+    put = [0.0] * bins
+
     for b in bars:
-        # Volumen auf das Kursband der Kerze verteilen statt nur auf den
+        # Volumen ueber das Kursband der Kerze verteilen statt nur auf den
         # Schlusskurs zu buchen - sonst verschwinden weite Kerzen im Profil.
         i0 = max(0, min(bins - 1, int((b["l"] - lo) / step)))
         i1 = max(0, min(bins - 1, int((b["h"] - lo) / step)))
         span = i1 - i0 + 1
-        share = (b["v"] or 1.0) / span
+        v = (b.get("v") or 1.0) / span
+        cv = (b.get("cv") or 0.0) / span
+        pv = (b.get("pv") or 0.0) / span
         for i in range(i0, i1 + 1):
-            hist[i] += share
+            tot[i] += v
+            call[i] += cv
+            put[i] += pv
 
-    total = sum(hist)
+    total = sum(tot)
     if total <= 0:
         return {}
-    poc_i = max(range(bins), key=lambda i: hist[i])
-    # Value Area: vom POC aus nach beiden Seiten wachsen, immer zur
-    # volumenstaerkeren Seite hin, bis 70 % erreicht sind.
+
+    poc_i = max(range(bins), key=lambda i: tot[i])
+    # Value Area: vom POC aus zur jeweils volumenstaerkeren Seite wachsen,
+    # bis 70 Prozent erreicht sind.
     lo_i = hi_i = poc_i
-    acc = hist[poc_i]
+    acc = tot[poc_i]
     while acc < total * 0.7 and (lo_i > 0 or hi_i < bins - 1):
-        down = hist[lo_i - 1] if lo_i > 0 else -1
-        up = hist[hi_i + 1] if hi_i < bins - 1 else -1
+        down = tot[lo_i - 1] if lo_i > 0 else -1
+        up = tot[hi_i + 1] if hi_i < bins - 1 else -1
         if up >= down:
             hi_i += 1
-            acc += hist[hi_i]
+            acc += tot[hi_i]
         else:
             lo_i -= 1
-            acc += hist[lo_i]
+            acc += tot[lo_i]
+
     price = lambda i: lo + (i + 0.5) * step
-    peak = max(hist) or 1.0
+    peak = max(tot) or 1.0
+
+    # Knoten: lokale Maxima ueber dem Mittel, Vakuum: lokale Minima darunter.
+    mean = total / bins
+    hvn, lvn = [], []
+    win = max(2, bins // 40)
+    for i in range(win, bins - win):
+        seg = tot[i - win:i + win + 1]
+        if tot[i] == max(seg) and tot[i] > mean * 1.4:
+            if not hvn or abs(price(i) - hvn[-1]["p"]) > step * win:
+                hvn.append({"p": price(i), "w": tot[i] / peak})
+        if tot[i] == min(seg) and tot[i] < mean * 0.45 and lo_i < i < hi_i + win:
+            if not lvn or abs(price(i) - lvn[-1]["p"]) > step * win:
+                lvn.append({"p": price(i), "w": tot[i] / peak})
+
     return {
         "poc": price(poc_i),
         "vah": price(hi_i),
         "val": price(lo_i),
-        "lo": lo, "hi": hi, "step": step,
-        "bins": [{"p": price(i), "w": hist[i] / peak} for i in range(bins)],
+        "lo": lo, "hi": hi, "step": step, "bins_n": bins,
+        "peak": peak,
+        "call_total": sum(call), "put_total": sum(put),
+        "hvn": hvn[:6], "lvn": lvn[:4],
+        "bins": [{
+            "p": price(i),
+            "w": tot[i] / peak,
+            # Anteil der Call-Seite an diesem Band, 0.5 heisst ausgeglichen
+            "c": (call[i] / (call[i] + put[i])) if (call[i] + put[i]) > 0 else 0.5,
+            "va": lo_i <= i <= hi_i,
+        } for i in range(bins)],
     }
 
 

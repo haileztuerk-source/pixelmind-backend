@@ -171,12 +171,18 @@ def aggregate(bars, minutes):
             if bucket:
                 out.append(bucket)
             bucket = {"t": slot, "o": b["o"], "h": b["h"], "l": b["l"],
-                      "c": b["c"], "v": b["v"]}
+                      "c": b["c"], "v": b["v"],
+                      # Call- und Put-Volumen getrennt weiterreichen: daraus
+                      # entsteht spaeter ein Profil, das nicht nur zeigt WO
+                      # gehandelt wurde, sondern auf welcher Seite.
+                      "cv": b.get("cv", 0.0), "pv": b.get("pv", 0.0)}
         else:
             bucket["h"] = max(bucket["h"], b["h"])
             bucket["l"] = min(bucket["l"], b["l"])
             bucket["c"] = b["c"]
             bucket["v"] += b["v"]
+            bucket["cv"] += b.get("cv", 0.0)
+            bucket["pv"] += b.get("pv", 0.0)
     if bucket:
         out.append(bucket)
     return out
