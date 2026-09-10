@@ -1100,6 +1100,37 @@ function draw(){
     lo = Math.max(lo, barLo - barRange*0.25);
     hi = Math.min(hi, barHi + barRange*0.25);
   }
+
+  // Der Kurs steht in der Mitte, und zwar immer.
+  //
+  // Vorher folgte die Skala allein der Kerzenspanne, und der Kurs landete,
+  // wo er landete - am Tageshoch klebte er oben am Rand, am Tagestief
+  // unten. Genau dann ist er aber am wichtigsten, und genau dann sah man
+  // in die Richtung, in die er sich bewegte, am wenigsten Platz.
+  //
+  // Gespiegelt wird um den Kurs: der halbe Ausschnitt ist so gross wie
+  // der weiteste Abstand vom Kurs zu einer Kerze. Damit ist jede Kerze
+  // vollstaendig im Bild - das ist die zweite Bedingung - und oben wie
+  // unten steht gleich viel Raum.
+  //
+  // Der Preis dafuer ist ehrlich zu benennen: steht der Kurs am Rand der
+  // Tagesspanne, bleibt die Gegenseite leer. Das ist keine Verschwendung,
+  // sondern die Aussage - der Raum zeigt, wie weit es zurueck zur anderen
+  // Seite ist.
+  if(!S.fitAll && S.data.spot){
+    const c = S.data.spot;
+    // Zwei Halbspannen: eine, die nur die Kerzen fasst, und eine, die
+    // auch die nahen Level einschliesst.
+    const halfBars = Math.max(c - barLo, barHi - c, barRange * 0.10);
+    const halfLv   = Math.max(c - lo, hi - c);
+    // Die Level duerfen mitziehen, aber nur um ein Drittel. Ohne diese
+    // Grenze bestimmte ein Level die Skala und das Spiegeln verdoppelte
+    // seinen Einfluss noch: gemessen blieben den Kerzen 47 Prozent der
+    // Hoehe. Das Zentrieren allein kostet nicht so viel - es war das
+    // Level, und was ausserhalb bleibt, sagt ohnehin die Randmarke.
+    const half = Math.max(halfBars, Math.min(halfLv, halfBars * 1.35));
+    lo = c - half; hi = c + half;
+  }
   const pd=(hi-lo)*0.06||1; lo-=pd; hi+=pd;
   const y=p=>topPad+(hi-p)/(hi-lo)*ph, bw=pw/bars.length;
 
