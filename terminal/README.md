@@ -69,6 +69,28 @@ uebernimmt die Mechanik aus `_zone_day_book()`:
 
 ## Volumenprofil
 
+**Die Quelle.** Der Index selbst wird nicht gehandelt und hat kein
+Volumen. Fuer ein Volumenprofil braucht es gehandeltes Volumen, und das
+liegt im Future: `NQ=F` traegt bei Yahoo das CME-Handelsvolumen je
+Kerze. Die Future-Preise werden ueber ein einziges Verhaeltnis in den
+Index-Preisraum gehoben, damit Profil, Kerzen und Strikes auf derselben
+Achse bleiben. Faellt der Future aus, tritt das Optionsvolumen der Kette
+an; fehlt auch das, zaehlt das Profil Zeit je Preis. Die Kopfzeile
+benennt, welcher der drei Faelle gerade gilt.
+
+**Die Verteilung.** Volumen gleichmaessig ueber die Kerzenspanne zu
+verteilen IST die TPO-Rechnung - sie zaehlt, welche Preise beruehrt
+wurden, und macht aus jedem Gewicht wieder Zeit je Preis. Deshalb faellt
+der groessere Teil (72 %) auf den Koerper zwischen Eroeffnung und
+Schluss, der Rest auf die Dochte. Eine Naeherung; exakt ginge es nur mit
+Tickdaten.
+
+**Die Aufloesung.** Das Profil rechnet immer auf Minutenkerzen,
+unabhaengig von der angezeigten Zeitebene. Gemessen an derselben
+Sitzung: mittlere Kerzenspanne 6,7 statt 22,1 Punkte, Value Area
+**42 statt 97 Punkte**. Aus 5-Minuten-Kerzen war sie mehr als doppelt
+so breit, wie sie ist - reine Verschmierung innerhalb der Kerze.
+
 180 Bins statt 90, und zweigeteilt: Cboe liefert je Minute getrennt
 Call- und Put-Volumen. Ein Preisband, an dem fast nur Puts liefen,
 bedeutet etwas anderes als eines mit ueberwiegend Calls - auch bei

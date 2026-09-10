@@ -152,7 +152,7 @@ def atr(bars, period=14):
     return sum(window) / len(window) if window else 0.0
 
 
-def volume_profile(bars, bins=180):
+def volume_profile(bars, bins=180, kind="volume"):
     """Volumenprofil mit Seitenaufteilung und Knotenerkennung.
 
     Deutlich feiner aufgeloest als ein blosser Streifen, und zweigeteilt:
@@ -178,19 +178,37 @@ def volume_profile(bars, bins=180):
     call = [0.0] * bins
     put = [0.0] * bins
 
-    for b in bars:
-        # Volumen ueber das Kursband der Kerze verteilen statt nur auf den
-        # Schlusskurs zu buchen - sonst verschwinden weite Kerzen im Profil.
-        i0 = max(0, min(bins - 1, int((b["l"] - lo) / step)))
-        i1 = max(0, min(bins - 1, int((b["h"] - lo) / step)))
+    # Verteilung innerhalb der Kerze: NICHT gleichmaessig ueber die ganze
+    # Spanne. Genau das waere die TPO-Rechnung - sie zaehlt, welche Preise
+    # beruehrt wurden, und macht aus jedem Gewicht wieder Zeit je Preis.
+    #
+    # Gehandelt wird ueberwiegend im Koerper zwischen Eroeffnung und
+    # Schluss; die Dochte sind Ausschlaege, an denen wenig umging.
+    # Deshalb faellt der groessere Teil auf den Koerper. Das bleibt eine
+    # Naeherung - exakt ginge es nur mit Tickdaten -, aber es ist die
+    # Naeherung, die ein Volumenprofil von einem TPO unterscheidet.
+    BODY_SHARE = 0.72
+
+    def spread(i0, i1, amount, acc):
         span = i1 - i0 + 1
-        v = (b.get("v") or 1.0) / span
-        cv = (b.get("cv") or 0.0) / span
-        pv = (b.get("pv") or 0.0) / span
+        share = amount / span
         for i in range(i0, i1 + 1):
-            tot[i] += v
-            call[i] += cv
-            put[i] += pv
+            acc[i] += share
+
+    def idx(price):
+        return max(0, min(bins - 1, int((price - lo) / step)))
+
+    for b in bars:
+        wick0, wick1 = idx(b["l"]), idx(b["h"])
+        body0, body1 = sorted((idx(min(b["o"], b["c"])), idx(max(b["o"], b["c"]))))
+        v = b.get("v") or 1.0
+        cv = b.get("cv") or 0.0
+        pv = b.get("pv") or 0.0
+        for amount, acc in ((v, tot), (cv, call), (pv, put)):
+            if amount <= 0:
+                continue
+            spread(body0, body1, amount * BODY_SHARE, acc)
+            spread(wick0, wick1, amount * (1.0 - BODY_SHARE), acc)
 
     total = sum(tot)
     if total <= 0:
@@ -201,7 +219,7 @@ def volume_profile(bars, bins=180):
     # TPO-Profil, kein Volumenprofil. Das darf nicht stillschweigend
     # passieren: die beiden Groessen bedeuten Verschiedenes.
     has_volume = any((b.get("v") or 0) > 0 for b in bars)
-    basis = "volume" if has_volume else "time"
+    basis = kind if has_volume else "time"
 
     poc_i = max(range(bins), key=lambda i: tot[i])
     # Value Area: vom POC aus zur jeweils volumenstaerkeren Seite wachsen,
@@ -318,3 +336,44 @@ def bars(market_key, interval="15m"):
             return agg, {"source": "cboe", "symbol": conf["chain"], "stale": stale}
     return ybars, {"source": "yahoo", "symbol": conf["index"],
                    "stale": True, "thin": True}
+
+
+def profile_bars(market_key, interval=None, index_spot=None):
+    """Kerzen fuer das Volumenprofil - aus dem Future, nicht aus dem Index.
+
+    Der Index selbst wird nicht gehandelt und hat kein Volumen. Fuer ein
+    Volumenprofil braucht es das gehandelte Volumen, und das liegt im
+    Future: NQ=F traegt bei Yahoo das CME-Handelsvolumen je Kerze.
+
+    Gemessen ist der Unterschied deutlich - beim Future betraegt das
+    Verhaeltnis von Spitze zu Mittel rund das Zehnfache, beim
+    Optionsvolumen der Kette nur das Fuenffache. Bei flachem Gewicht
+    bleibt von "Volumen je Preis" faktisch "Zeit je Preis" uebrig, also
+    ein TPO-Profil unter falschem Namen.
+
+    Die Future-Preise werden ueber ein einziges Verhaeltnis in den
+    Index-Preisraum gehoben, damit Profil, Kerzen und Strikes weiter auf
+    derselben Achse liegen.
+    """
+    conf = MARKETS.get(market_key) or MARKETS[DEFAULT_MARKET]
+    sym = conf["chart"]
+    # Immer Minutenkerzen, unabhaengig von der angezeigten Zeitebene.
+    # Gemessen an derselben Sitzung: mittlere Kerzenspanne 6,7 statt
+    # 22,1 Punkte, und die Value Area schrumpft von 97 auf 42 Punkte.
+    # Aus 5-Minuten-Kerzen war sie mehr als doppelt so breit, wie sie
+    # ist - reine Verschmierung innerhalb der Kerze.
+    fut, meta = candles(sym, "1m", ttl=45)
+    if not fut or not any((b.get("v") or 0) > 0 for b in fut):
+        return [], 1.0, None
+
+    fut_spot = meta.get("regularMarketPrice") or fut[-1]["c"]
+    ratio = (index_spot / fut_spot) if (index_spot and fut_spot) else 1.0
+    if not (0.8 < ratio < 1.25):
+        ratio = 1.0        # unplausibel - lieber ungewandelt als verzerrt
+
+    mapped = [{
+        "t": b["t"], "v": b["v"],
+        "o": b["o"] * ratio, "h": b["h"] * ratio,
+        "l": b["l"] * ratio, "c": b["c"] * ratio,
+    } for b in fut]
+    return mapped, ratio, sym

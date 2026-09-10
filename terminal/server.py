@@ -77,7 +77,22 @@ def build_snapshot(key, interval="15m"):
         session = {}
     session.update(market.overnight_range(bars))
 
-    vp = market.volume_profile(bars) if bars else {}
+    # Volumenprofil aus dem Future: der Index selbst wird nicht gehandelt
+    # und hat kein Volumen. Faellt der Future aus, tritt das
+    # Optionsvolumen der Kette an - und wenn auch das fehlt, zaehlt das
+    # Profil Zeit je Preis. Alle drei Faelle werden benannt.
+    idx_spot = gexp.get("spot") if gexp.get("ok") else None
+    pbars, pratio, psym = market.profile_bars(key, index_spot=idx_spot)
+    if pbars:
+        vp = market.volume_profile(pbars, kind="cme")
+        vp["source"] = psym
+        vp["ratio"] = pratio
+    else:
+        # Rueckfall: das Optionsvolumen der Kette, ebenfalls minuetlich.
+        raw, _stale = cboe.intraday(conf["chain"])
+        vp = market.volume_profile(raw or bars, kind="options") if (raw or bars) else {}
+        if vp:
+            vp["source"] = conf["chain"]
     spot = (gexp.get("spot") if gexp.get("ok") else None) or (bars[-1]["c"] if bars else None)
 
     zone_list, levels = zones.build(gexp, vp, session, atr_v, spot) if spot else ([], [])
