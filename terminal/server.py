@@ -19,6 +19,7 @@ from .agent import AGENT
 from .daybook import BOOK
 from . import keepalive, store
 from .walltrail import TRAIL
+from .broker import SPACE
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
@@ -179,6 +180,12 @@ def build_snapshot(key, interval="15m"):
     # gesetzt wurden. Erst dadurch sind die Waende ueber den Tag hinweg
     # dieselben Zahlen - ohne das wandert jede Marke mit jedem Snapshot.
     snap["fixed"] = BOOK.update(key, snap)
+
+    # Anzeige-Preisraum. Nur beschreibend: der Snapshot bleibt vollstaendig
+    # im Index-Preisraum, das Frontend verschiebt allein die ausgegebenen
+    # Zahlen. Wer hier die Preise selbst verschoebe, haette zwei
+    # Umrechnungen im Umlauf - siehe terminal/broker.py.
+    snap["space"] = SPACE.get(key)
     return snap
 
 
@@ -238,6 +245,11 @@ def state():
     if interval not in market.INTERVALS:
         return jsonify({"error": "unbekanntes Intervall"}), 400
     snap = dict(snapshot(key, interval))
+    # Den Anzeige-Preisraum frisch nachtragen statt aus dem Snapshot zu
+    # nehmen: der ist bis zu 25 Sekunden alt, und eine gerade gemessene
+    # Kalibrierung soll sofort greifen und nicht erst beim naechsten
+    # Neuaufbau. Er kostet nichts - es ist ein Nachschlagen im Speicher.
+    snap["space"] = SPACE.get(key)
     if request.args.get("light") == "1":
         for k in ("bars", "rows", "curve", "leading_walls", "tpo"):
             snap.pop(k, None)
@@ -296,6 +308,34 @@ def book():
     if not key:
         return jsonify({"error": "unbekannter Markt"}), 400
     return jsonify(BOOK.view(key, snapshot(key)))
+
+
+@app.route("/api/space", methods=["GET", "POST", "DELETE"])
+def space():
+    """Anzeige-Preisraum lesen, messen oder aufheben.
+
+    Beim Messen kommt der Indexkurs NICHT aus einem eigenen Abruf,
+    sondern aus dem laufenden Snapshot. Zwei getrennte Abrufe waeren zwei
+    Zeitpunkte, und die Differenz zweier Zeitpunkte ist keine Basis,
+    sondern eine Basis plus die Bewegung dazwischen.
+    """
+    key = _market_arg()
+    if not key:
+        return jsonify({"error": "unbekannter Markt"}), 400
+
+    if request.method == "DELETE":
+        return jsonify(SPACE.clear(key))
+
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        ref = snapshot(key).get("spot")
+        if not ref:
+            return jsonify({"ok": False,
+                            "error": "kein Indexkurs verfuegbar"}), 503
+        res = SPACE.calibrate(key, body.get("name"), body.get("quote"), ref)
+        return jsonify(res), (200 if res.get("ok") else 400)
+
+    return jsonify(SPACE.get(key))
 
 
 @app.route("/api/agent/messages")

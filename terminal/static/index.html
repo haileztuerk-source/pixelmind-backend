@@ -300,6 +300,20 @@ canvas{display:block;width:100%;height:100%}
 .sh-n{padding:13px 18px;font-size:11.5px;color:var(--ink-faint);line-height:1.55;
   border-top:1px solid var(--line-soft)}
 
+/* Preisraum messen */
+.sp-row{display:flex;align-items:center;gap:12px;padding:11px 18px;
+  border-top:1px solid var(--line-soft)}
+.sp-row label{font-size:13px;color:var(--ink-dim);min-width:104px}
+.sp-row input{flex:1;min-width:0;background:var(--panel-3);color:var(--ink);
+  border:1px solid var(--line);border-radius:10px;padding:12px 13px;
+  font-family:var(--mono);font-size:16px;   /* 16px: iOS zoomt darunter hinein */
+  -webkit-appearance:none}
+.sp-row input:focus{outline:none;border-color:var(--resist)}
+.sp-btns{display:flex;gap:10px;padding:14px 18px}
+.sp-b{flex:1;min-height:48px;border-radius:12px;border:1px solid var(--line);
+  background:var(--panel-3);color:var(--ink);font-size:14px;font-weight:600}
+.sp-b.prim{background:var(--resist);border-color:var(--resist);color:#1A1206}
+
 /* Aktualisieren */
 .refresh{
   position:absolute;left:50%;top:6px;transform:translateX(-50%);z-index:5;
@@ -403,6 +417,20 @@ const SYM = {NQ:"NDX", ES:"SPX", YM:"DJX", RTY:"RUT", GC:"GLD"};
 const $ = id => document.getElementById(id);
 const fmt = (v,d=0) => (v==null||isNaN(v)) ? "—"
   : v.toLocaleString("de-DE",{minimumFractionDigits:d,maximumFractionDigits:d});
+/** Ein PREIS zur Anzeige. Verschiebt in den Preisraum des Brokers.
+
+    Getrennt von fmt(), und das ist der ganze Punkt: fmt() bleibt fuer
+    Abstaende zustaendig - ATR, Zonenbreiten, "42 Punkte entfernt",
+    Drift. Ein Abstand darf NICHT verschoben werden, denn der Versatz
+    kuerzt sich in jeder Differenz heraus. Beides durch dieselbe
+    Funktion zu schicken hiesse, jede Distanz um den Versatz zu
+    verfaelschen.
+
+    Die Geometrie fasst px() ebenfalls nicht an. Kerzen, Waende und
+    Achse bleiben im Index-Preisraum und liegen damit weiter exakt
+    aufeinander; verschoben wird allein die ausgegebene Zahl. Genau eine
+    Umrechnung, an genau einer Stelle - siehe terminal/broker.py. */
+const px = (v,d=0) => (v==null||isNaN(v)) ? "—" : fmt(v + (S.off||0), d);
 const fmtM = v => v==null ? "—" : (Math.abs(v)>=1e9 ? (v/1e9).toFixed(1)+" Mrd"
   : Math.abs(v)>=1e6 ? (v/1e6).toFixed(0)+" Mio" : (v/1e3).toFixed(0)+"k");
 const sgn = v => v==null ? "—" : (v>=0?"+":"")+fmt(v);
@@ -422,13 +450,13 @@ function tickTo(el, val, dur=520){
   const from = _ticks.get(el);
   _ticks.set(el, val);
   if(from==null || Math.abs(val-from) < 0.01 || !window.requestAnimationFrame){
-    el.textContent = fmt(val); return;
+    el.textContent = px(val); return;
   }
   const t0 = performance.now();
   const step = now => {
     const k = Math.min(1, (now-t0)/dur);
     const e = 1 - Math.pow(1-k, 3);          // sanft auslaufend
-    el.textContent = fmt(from + (val-from)*e);
+    el.textContent = px(from + (val-from)*e);
     if(k < 1) requestAnimationFrame(step);
   };
   requestAnimationFrame(step);
@@ -442,6 +470,9 @@ async function load(){
     const d = await r.json();
     const fresh = !S.data || S.data.market!==d.market || S.data.interval!==d.interval;
     S.data = d;
+    // Versatz in den Preisraum des Brokers. Steht an genau dieser einen
+    // Stelle im Zustand; px() liest ihn, sonst niemand.
+    S.off = (d.space && d.space.offset) || 0;
     if(fresh || !S.view0) fitView();
     S.view0 = true;
     render();
@@ -1010,7 +1041,7 @@ function draw(){
     used.push(by);
     ctx.fillStyle=c; ctx.fillRect(pw+2, by-6.5, PAD.r-4, 12.5);
     ctx.fillStyle=V("--ground"); ctx.font="600 9.5px "+V("--mono"); ctx.textAlign="left";
-    ctx.fillText(fmt(l.p), pw+5, by+2.5);
+    ctx.fillText(px(l.p), pw+5, by+2.5);
     if(l.lab && !S.layers.gpbox){
       ctx.fillStyle=c; ctx.font="8.5px "+V("--mono"); ctx.textAlign="right";
       ctx.globalAlpha=.9; ctx.fillText(l.lab, pw-4, by-1); ctx.globalAlpha=1;
@@ -1021,7 +1052,7 @@ function draw(){
       ctx.font="7.5px "+V("--mono");
       const w1=ctx.measureText(l.lab).width;
       ctx.font="600 9px "+V("--mono");
-      const w2=ctx.measureText(fmt(l.p)).width;
+      const w2=ctx.measureText(px(l.p)).width;
       // Rechts neben dem Profil absetzen, nicht darauf - im Desktop
       // stehen die Kaesten ebenfalls frei.
       const profW = S.layers.profil ? Math.min(pw*0.19, 74) + 8 : 6;
@@ -1055,7 +1086,7 @@ function draw(){
         ctx.globalAlpha=1;
         ctx.fillStyle=V("--ground"); ctx.textAlign="left";
         ctx.font="7.5px "+V("--mono"); ctx.fillText(l.lab, bx+5, byB-5);
-        ctx.font="600 9px "+V("--mono"); ctx.fillText(fmt(l.p), bx+5, byB+7);
+        ctx.font="600 9px "+V("--mono"); ctx.fillText(px(l.p), bx+5, byB+7);
       }
     }
   });
@@ -1072,7 +1103,7 @@ function draw(){
       list.forEach((l,i)=>{
         const c=V(l.c);
         const yy = dir>0 ? topPad+7+i*13 : topPad+ph-7-i*13;
-        const txt = (dir>0?"▲ ":"▼ ")+fmt(l.p);
+        const txt = (dir>0?"▲ ":"▼ ")+px(l.p);
         const w = ctx.measureText(txt).width+9;
         ctx.globalAlpha=.92; ctx.fillStyle=c;
         ctx.fillRect(pw-w-3, yy-6, w, 12);
@@ -1096,7 +1127,7 @@ function draw(){
       ctx.setLineDash([]); ctx.globalAlpha=1;
       ctx.fillStyle=V("--ink"); ctx.fillRect(pw+2,yy-7.5,PAD.r-4,15);
       ctx.fillStyle=V("--ground"); ctx.font="700 10px "+V("--mono"); ctx.textAlign="left";
-      ctx.fillText(fmt(S.data.spot), pw+5, yy+3);
+      ctx.fillText(px(S.data.spot), pw+5, yy+3);
     }
   }
   if(S.cross!=null){
@@ -1108,7 +1139,7 @@ function draw(){
     ctx.setLineDash([]); ctx.globalAlpha=1;
     $("cross").className="cross on";
     $("cross").innerHTML = `${new Date(b.t*1000).toLocaleString("de-DE",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}<br>`+
-      `O ${fmt(b.o)}&nbsp; H ${fmt(b.h)}<br>L ${fmt(b.l)}&nbsp; C ${fmt(b.c)}`;
+      `O ${px(b.o)}&nbsp; H ${px(b.h)}<br>L ${px(b.l)}&nbsp; C ${px(b.c)}`;
   } else $("cross").className="cross";
 
   // Vignette: nimmt den Raendern Gewicht, damit die Mitte traegt
@@ -1221,7 +1252,7 @@ wrap.addEventListener("wheel",e=>{
 // ======================= Rendern =======================
 function render(){
   const d=S.data; if(!d) return;
-  $("sym").textContent = SYM[S.market]||S.market;
+  $("sym").textContent = d.space?.name || SYM[S.market] || S.market;
   tickTo($("spot"), d.spot);
   const ov = S.overview.find(o=>o.key===S.market);
   const ch = $("chg");
@@ -1234,6 +1265,8 @@ function render(){
     d.regime==="long"?"LONG γ" : d.regime==="short"?"SHORT γ" : "—";
   const stale = d.chain_stale || d.bar_source?.stale;
   $("meta").innerHTML =
+    `${d.space?.name ? d.space.name+" "+sgn(Math.round(d.space.offset))
+        +(d.space.stale?" ⚠":"")+" · " : ""}`+
     `${d.bar_source?.source==="cboe"?"Cboe":"Yahoo"}${stale?" · STALE":""} · ATR ${fmt(d.atr)} · `+
     `${d.bars.length} Kerzen${S.layers.profil && d.vp?.basis
       ? " · "+({cme:"CME-Volumen", etf:"Stückvolumen", options:"Optionsfluss", time:"Zeit je Preis"}[d.vp.basis] || d.vp.basis)
@@ -1271,8 +1304,9 @@ function renderStrip(){
     : Object.keys(SYM).map(k=>({key:k,name:k,spot:null,change_pct:null}));
   el.innerHTML = src.map(m=>`
     <button class="mchip ${m.key===S.market?"on":""}" data-m="${m.key}">
-      <div class="k">${SYM[m.key]||m.key}</div>
-      <div class="p tnum">${fmt(m.spot, m.spot&&m.spot<1000?1:0)}</div>
+      <div class="k">${m.key===S.market && S.data?.space?.name
+        ? esc(S.data.space.name) : (SYM[m.key]||m.key)}</div>
+      <div class="p tnum">${(m.key===S.market?px:fmt)(m.spot, m.spot&&m.spot<1000?1:0)}</div>
       <div class="c tnum ${m.change_pct==null?"":(m.change_pct>=0?"up":"dn")}">${
         m.change_pct==null?"—":(m.change_pct>=0?"+":"")+m.change_pct.toFixed(2)+"%"}</div>
     </button>`).join("");
@@ -1305,11 +1339,11 @@ function renderLevel(){
   h += lv.length ? lv.map(l=>`
     <div class="card role" style="--c:${kcol(l.kind)}">
       <div class="ch">
-        <b>${fmt(l.price)}</b>${stateTag(l.state)}
+        <b>${px(l.price)}</b>${stateTag(l.state)}
         <span class="far">${sgn(l.price-d.spot)}</span>
       </div>
       <div class="cs">${esc(l.labels.join(" · "))}${
-        Math.abs(l.drift||0) >= 1 ? ` · läuft aktuell auf ${fmt(l.live)} <span style="color:var(--warn)">(${sgn(l.drift)})</span>` : " · unverändert"}</div>
+        Math.abs(l.drift||0) >= 1 ? ` · läuft aktuell auf ${px(l.live)} <span style="color:var(--warn)">(${sgn(l.drift)})</span>` : " · unverändert"}</div>
       <div class="cm">
         <span>${l.exams_total===0?"nie getestet":l.exams_total+". Prüfung"}</span>
         ${l.exams_held?`<span style="color:var(--support)">${l.exams_held}× gehalten</span>`:""}
@@ -1326,7 +1360,7 @@ function renderLevel(){
     h += `<div class="sec">Konfluenz über Ketten — dieselbe Wand, zwei Quellen</div>`;
     h += conf.slice(0,4).map(z=>`
       <div class="card role" style="--c:${col(z.mid)}">
-        <div class="ch"><b>${z.top-z.bot < 2 ? fmt(z.mid) : fmt(z.bot)+" – "+fmt(z.top)}</b>
+        <div class="ch"><b>${z.top-z.bot < 2 ? px(z.mid) : px(z.bot)+" – "+px(z.top)}</b>
           <span class="tag">${esc(z.chains.join(" + "))}</span>
           <span class="far">${sgn(z.mid-d.spot)}</span></div>
         <div class="cs">${z.members} Wände auf einem Fleck · ${esc(z.sides.map(x=>x==="call"?"Call":"Put").join(" und "))}</div>
@@ -1345,7 +1379,7 @@ function renderLevel(){
         <span class="tag">${esc(ws[0].chain_kind)}</span>
         <span class="far">Raster ${fmt(grid)} Pkt</span></div>`;
       h += ws.map(w=>`<div class="brow">
-        <span class="k" style="color:var(--${w.side==="call"?"resist":"support"})">${fmt(w.price)}</span>
+        <span class="k" style="color:var(--${w.side==="call"?"resist":"support"})">${px(w.price)}</span>
         <span class="bar" style="--c:var(--${w.side==="call"?"resist":"support"})"><i style="width:${(w.oi/mx*100).toFixed(0)}%"></i></span>
         <span class="v">${fmtM(w.oi)}</span></div>`).join("");
       h += `</div>`;
@@ -1363,7 +1397,7 @@ function renderLevel(){
   const zs=d.zones||[];
   h += zs.length ? zs.map(z=>`
     <div class="card role" style="--c:${col(z.mid)}">
-      <div class="ch"><b>${z.width<2?fmt(z.mid):fmt(z.bot)+" – "+fmt(z.top)}</b>
+      <div class="ch"><b>${z.width<2?px(z.mid):px(z.bot)+" – "+px(z.top)}</b>
         <span class="tag">#${z.rank}</span>
         <span class="far">${sgn(z.mid-d.spot)}</span></div>
       <div class="cs">${esc(z.labels.join(" · "))}</div>
@@ -1389,11 +1423,11 @@ function renderGamma(){
       <div class="n">${d.regime==="short"?"Dealer verstärken Bewegungen":"Dealer dämpfen Bewegungen"}</div></div>
     <div class="tile"><div class="l">davon 0DTE</div><div class="v">${fmtM(d.net_gex_zdte)}</div>
       <div class="n">Verfall heute</div></div>
-    <div class="tile"><div class="l">Zero-Gamma</div><div class="v">${fmt(d.flip)}</div>
+    <div class="tile"><div class="l">Zero-Gamma</div><div class="v">${px(d.flip)}</div>
       <div class="n">${d.flip?`${fmt(Math.abs(d.spot-d.flip))} Pkt ${d.spot>d.flip?"darunter":"darüber"}`:"—"}</div></div>
-    <div class="tile"><div class="l">Max Pain</div><div class="v">${fmt(d.max_pain)}</div>
+    <div class="tile"><div class="l">Max Pain</div><div class="v">${px(d.max_pain)}</div>
       <div class="n">Verfalls-Gravitation</div></div>
-    <div class="tile"><div class="l">Gamma-Pin</div><div class="v">${fmt(d.gamma_pin)}</div>
+    <div class="tile"><div class="l">Gamma-Pin</div><div class="v">${px(d.gamma_pin)}</div>
       <div class="n">stärkster Einzelmagnet</div></div>
     <div class="tile"><div class="l">Put / Call</div><div class="v">${d.pcr?d.pcr.toFixed(2):"—"}</div>
       <div class="n">${fmtM(d.put_oi)} Put · ${fmtM(d.call_oi)} Call</div></div>
@@ -1408,14 +1442,14 @@ function renderGamma(){
   if(walls.length){
     const mx=Math.max(...walls.map(w=>w.oi))||1;
     h+=`<div class="sec">OI-Wände · ±6 % um den Kurs</div>`+walls.map(w=>`
-      <div class="brow"><span class="k" style="color:var(--${w.r})">${fmt(w.price)}</span>
+      <div class="brow"><span class="k" style="color:var(--${w.r})">${px(w.price)}</span>
       <span class="bar" style="--c:var(--${w.r})"><i style="width:${(w.oi/mx*100).toFixed(0)}%"></i></span>
       <span class="v">${fmtM(w.oi)}</span></div>`).join("");
   }
   if((d.fresh_flow||[]).length){
     const mx=Math.max(...d.fresh_flow.map(x=>x.voi))||1;
     h+=`<div class="sec">Fresh Flow · Volumen gegen stehendes OI</div>`+d.fresh_flow.map(x=>`
-      <div class="brow"><span class="k">${fmt(x.strike)}</span>
+      <div class="brow"><span class="k">${px(x.strike)}</span>
       <span class="bar" style="--c:var(--agent)"><i style="width:${(x.voi/mx*100).toFixed(0)}%"></i></span>
       <span class="v">${x.voi.toFixed(1)}×</span></div>`).join("");
   }
@@ -1540,13 +1574,80 @@ $("sheetClose").onclick=closeSheet;
   });
 })();
 
+/** Preisraum messen: eine Ablesung aus der Plattform des Nutzers.
+
+    Bewusst keine Formel. Die Basis eines Future haengt an Restlaufzeit,
+    Zins und Dividenden, und darauf legt jeder Broker seinen eigenen
+    Aufschlag - was die Plattform anzeigt, weiss nur die Plattform. Eine
+    einzige Ablesung ist genauer als jede Schaetzung. */
+function spaceSheet(){
+  const sp = S.data?.space || {};
+  const ref = S.data?.spot;
+  const alter = sp.at ? Math.round((Date.now()/1000 - sp.at)/3600) : null;
+  openSheet(`<div class="sh-t">Preisraum der Anzeige</div>`
+    +`<div class="sh-n">Der Terminal rechnet im Index-Preisraum — dort stehen die
+      Optionsketten, die Wände und das Zero-Gamma. Gehandelt wird ein CFD, und der
+      steht nicht auf demselben Wert: ein CFD auf den Nasdaq 100 folgt dem Future
+      und trägt dessen Basis, je nach Restlaufzeit einige zehn Punkte.
+      <br><br>Trag den Kurs ein, den deine Plattform <b>gerade jetzt</b> zeigt.
+      Der Versatz wird daraus gemessen und auf jede angezeigte Zahl gelegt —
+      Kerzen, Wände und Achse bleiben unverändert aufeinander liegen, denn
+      gerechnet wird weiter im Index-Preisraum.</div>`
+    +`<div class="sp-row"><label>Instrument</label>
+        <input id="spName" type="text" value="${esc(sp.name||"USTEC")}"
+               maxlength="12" autocomplete="off"></div>`
+    +`<div class="sp-row"><label>Kurs jetzt</label>
+        <input id="spQuote" type="text" inputmode="decimal"
+               placeholder="${ref?Math.round(ref+ (sp.offset||0)):"z. B. 29465"}"
+               autocomplete="off"></div>`
+    +`<div class="sh-n">Referenz im selben Moment: <b>${fmt(ref)}</b> (Index)
+      ${sp.name?`<br>Aktuell: ${esc(sp.name)} ${sgn(Math.round(sp.offset))} Punkte,
+        gemessen vor ${alter!=null?(alter<1?"unter einer Stunde":alter+" h"):"—"}
+        ${sp.stale?`<br><b style="color:var(--warn)">Älter als ein Tag — die Basis
+          läuft zum Verfall hin auf null zu, bitte nachmessen.</b>`:""}`:""}</div>`
+    +`<div class="sp-btns">
+        <button class="sp-b prim" id="spSave">Messen</button>
+        ${sp.name?`<button class="sp-b" id="spClear">Zurück auf Index</button>`:""}
+      </div>`
+    +`<div id="spMsg" class="sh-n"></div>`);
+  const msg = t => $("spMsg").innerHTML = t;
+  $("spSave").onclick = async () => {
+    const raw = ($("spQuote").value||"").replace(/\./g,"").replace(",",".").trim();
+    const q = parseFloat(raw);
+    if(!isFinite(q)){ msg('<b style="color:var(--warn)">Bitte einen Kurs eingeben.</b>'); return; }
+    try{
+      const r = await fetch(`/api/space?market=${S.market}`, {method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({name: $("spName").value, quote: q})});
+      const d = await r.json();
+      if(!d.ok){ msg(`<b style="color:var(--warn)">${esc(d.error||"nicht übernommen")}</b>`); return; }
+      buzz(12); closeSheet(); await load();
+    }catch(e){ msg('<b style="color:var(--warn)">Server nicht erreichbar.</b>'); }
+  };
+  if($("spClear")) $("spClear").onclick = async () => {
+    await fetch(`/api/space?market=${S.market}`, {method:"DELETE"});
+    buzz(8); closeSheet(); await load();
+  };
+}
+
 $("idbtn").onclick=()=>{
   const src=S.overview.length?S.overview:Object.keys(SYM).map(k=>({key:k,name:k}));
   openSheet(`<div class="sh-t">Markt</div>`+src.map(m=>`
     <div class="si ${m.key===S.market?"sel":""}" data-m="${m.key}">${esc(m.name)}
-      <span class="sub">${SYM[m.key]||m.key}${m.spot?" · "+fmt(m.spot):""}</span></div>`).join("")
+      <span class="sub">${m.key===S.market && S.data?.space?.name
+        ? esc(S.data.space.name) : (SYM[m.key]||m.key)}${
+        m.spot?" · "+(m.key===S.market?px:fmt)(m.spot):""}</span></div>`).join("")
+    +`<div class="sh-t" style="padding-top:14px">Preisraum der Anzeige</div>`
+    +`<div class="si" id="spOpen">${S.data?.space?.name
+        ? esc(S.data.space.name)+" "+sgn(Math.round(S.data.space.offset))+" Punkte"
+        : "Index-Preisraum"}
+        <span class="sub">${S.data?.space?.name
+          ? (S.data.space.stale?"nachmessen ⚠":"nachmessen")
+          : "auf deinen CFD einstellen"}</span></div>`
     +`<div class="sh-n">Kurse und Strikes kommen bei jedem Markt aus derselben Cboe-Kette — sie liegen
-      im selben Preisraum und brauchen keine Umrechnung.</div>`);
+      im selben Preisraum und brauchen keine Umrechnung. Dein CFD steht daneben: er folgt dem
+      Future und trägt dessen Basis. Der Versatz wird gemessen, nicht geschätzt.</div>`);
+  $("spOpen").onclick = () => spaceSheet();
   $("sheetBody").querySelectorAll("[data-m]").forEach(el=>el.onclick=()=>switchMarket(el.dataset.m));
 };
 
