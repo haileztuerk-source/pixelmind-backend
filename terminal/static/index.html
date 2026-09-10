@@ -309,6 +309,14 @@ canvas{display:block;width:100%;height:100%}
   70%{box-shadow:0 0 0 7px rgba(79,180,119,0)}
   100%{box-shadow:0 0 0 0 rgba(79,180,119,0)}}
 
+/* Naechste Annaeherung: Farbe nach Abstand in ATR */
+.near{padding:7px 13px 0;font-size:11px;color:var(--ink-faint);
+  font-family:var(--mono);line-height:1.5}
+.near b{color:var(--ink-dim);font-weight:600}
+.near.hit{color:var(--pos)} .near.hit b{color:var(--pos)}
+.near.hot b{color:var(--resist)}
+.near.cold{opacity:.6}
+
 /* Preisraum messen */
 .sp-row{display:flex;align-items:center;gap:12px;padding:11px 18px;
   border-top:1px solid var(--line-soft)}
@@ -1365,6 +1373,27 @@ function renderLevel(){
   const d=S.data, el=$("p-level");
   const fx=d.fixed||{}, lv=mergedFixed();
   const anchor=fx.anchor||{};
+/** Wie nah kam der Kurs heute? Erst das macht "ungetestet" zur Aussage.
+
+    Ohne diese Zeile sehen zwei Level gleich aus, die nichts miteinander
+    zu tun haben: eines, das der Kurs um ein Drittel einer Kerze verfehlt
+    hat, und eines, das zwanzig Kerzen entfernt steht. Gemessen an einem
+    echten Handelstag: die Call-Wand wurde um 25 Punkte verfehlt, die
+    Put-Wand daneben stand 1.500 Punkte weg - beide meldeten
+    "ungetestet".
+
+    Der Abstand in ATR ist der eigentliche Wert. 25 Punkte sind beim
+    Nasdaq ein Drittel einer Kerze, beim Dow das Fuenfundzwanzigfache. */
+function nearTag(l){
+  if(l.near == null) return "";
+  if(l.near <= 0.5) return `<div class="near hit">heute berührt</div>`;
+  const a = l.near_atr;
+  const stufe = a == null ? "" : a < 0.5 ? "hot" : a < 2 ? "warm" : "cold";
+  return `<div class="near ${stufe}">nächste Annäherung heute:
+    <b>${fmt(l.near)} Punkte</b>${a!=null?` · ${a.toFixed(2)} ATR`:""}${
+    a!=null && a<0.5 ? " — knapp verfehlt" : a!=null && a>=4 ? " — weit weg" : ""}</div>`;
+}
+
   const stateTag = s => s==="held"?'<span class="tag held">gehalten</span>'
     : s==="broken"?'<span class="tag broken">gebrochen</span>'
     : s==="tested"?'<span class="tag tested">im Test</span>'
@@ -1387,6 +1416,7 @@ function renderLevel(){
         ${l.exams_broken?`<span style="color:var(--warn)">${l.exams_broken}× gebrochen</span>`:""}
         <span>seit ${esc(l.born)}</span>
       </div>
+      ${nearTag(l)}
     </div>`).join("")
     : '<div class="empty">Das Buch ist noch leer. Es wird am nächsten Tagesanker gefüllt.</div>';
 

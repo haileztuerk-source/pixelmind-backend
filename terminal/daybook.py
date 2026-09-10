@@ -113,16 +113,57 @@ class DayBook:
                 "last_touch": None,
                 "born": hist["born"],
                 "exams_total": len(hist["exams"]),
+                # Naechste Annaeherung des Tages, in Punkten. None heisst
+                # noch nichts gemessen.
+                "near": None,
+                "near_ts": None,
             })
 
         m["day"] = day
         m["levels"] = levels
+        m["seen_t"] = None      # neuer Tag, neue Beobachtung
         m["anchor"] = {
             "spot": spot, "atr": snap.get("atr"), "regime": snap.get("regime"),
             "ts": datetime.now(timezone.utc).isoformat(),
             "net_gex": snap.get("net_gex"),
         }
         return levels
+
+    @staticmethod
+    def _fresh_span(snap, since_t):
+        """Hoch und Tief der Kerzen, die seit dem letzten Blick dazukamen.
+
+        Der Spot allein reicht nicht. Er wird alle zwanzig Sekunden
+        abgetastet, ein Docht dauert oft weniger - eine Wand konnte
+        angefasst werden und trotzdem "ungetestet" bleiben, weil
+        zwischen zwei Abtastungen niemand hinsah. Die Kerzen haben die
+        Bewegung vollstaendig.
+
+        Bewusst nur die NEUEN Kerzen, nicht die ganze Sitzung. Die
+        Sitzungsspanne waechst im Lauf des Tages immer weiter; gegen sie
+        gemessen bliebe ein einmal beruehrtes Level bis zum Abend
+        "beruehrt", der Zaehler liefe mit jeder Abklingzeit weiter hoch,
+        und ein Bruch wuerde nie erkannt, weil der Kurs rechnerisch nie
+        wieder weit genug weg waere. Gemessen wird also das Stueck
+        Bewegung, das seit dem letzten Lauf hinzugekommen ist.
+        """
+        bars = snap.get("bars") or []
+        seg = [b for b in bars if b["t"] > (since_t or 0)]
+        if not seg:
+            seg = bars[-1:]
+        if not seg:
+            return None, since_t
+        return (min(b["l"] for b in seg), max(b["h"] for b in seg)), seg[-1]["t"]
+
+    @staticmethod
+    def _gap(price, span, spot):
+        """Abstand eines Preises zur befahrenen Spanne. Null heisst: drin."""
+        if not span:
+            return abs(spot - price) if spot else None
+        lo, hi = span
+        if lo <= price <= hi:
+            return 0.0
+        return (lo - price) if price < lo else (price - hi)
 
     # ------------------------------------------------------------ Fortschreiben
     def update(self, key, snap):
@@ -154,12 +195,28 @@ class DayBook:
             tol_break = atr * BREAK_ATR
             tol_hold = atr * HOLD_ATR
             changed = False
+            span, seen_t = self._fresh_span(snap, m.get("seen_t"))
+            if seen_t and seen_t != m.get("seen_t"):
+                m["seen_t"] = seen_t
+                changed = True
 
             for lv in m["levels"]:
                 p, d = lv["price"], spot - lv["price"]
 
-                # Beruehrung mit Abklingzeit gegen Zappeln
-                if abs(d) <= tol_touch:
+                # Naechste Annaeherung des Tages festhalten. Erst damit ist
+                # "ungetestet" eine Aussage: ungetestet und 25 Punkte weg
+                # ist etwas anderes als ungetestet und 1.500 Punkte weg,
+                # und ohne diese Zahl sehen beide gleich aus.
+                gap = abs(self._gap(p, span, spot) or 0.0)
+                if lv.get("near") is None or gap < lv["near"]:
+                    lv["near"] = gap
+                    lv["near_ts"] = now
+                    changed = True
+
+                # Beruehrung mit Abklingzeit gegen Zappeln. Gemessen gegen
+                # die Kerzenspanne, nicht gegen den Spot - sonst faellt ein
+                # kurzer Docht zwischen zwei Abtastungen durch.
+                if gap <= tol_touch:
                     last = lv.get("last_touch") or 0
                     if now - last > TOUCH_GAP:
                         lv["touches"] += 1
@@ -172,8 +229,11 @@ class DayBook:
                         lv["exams_total"] = len(hist["exams"])
                         changed = True
 
-                # Bruch: Akzeptanz jenseits der Kante, nicht blosse Beruehrung
-                elif lv["state"] in ("tested", "held") and tol_break > 0:
+                # Bruch: Akzeptanz jenseits der Kante, nicht blosse
+                # Beruehrung - und gegen den aktuellen Kurs gemessen, nicht
+                # gegen die Spanne. Eine Spanne sagt, wo der Kurs war; ob
+                # eine Kante gebrochen ist, entscheidet, wo er jetzt steht.
+                if lv["state"] in ("tested", "held") and tol_break > 0:
                     broke = (lv["side"] == "above" and d > tol_break) or \
                             (lv["side"] == "below" and -d > tol_break)
                     if broke and lv["state"] != "broken":
@@ -220,6 +280,11 @@ class DayBook:
                 "exams_held": sum(1 for e in exams if e.get("outcome") == "held"),
                 "exams_broken": sum(1 for e in exams if e.get("outcome") == "broken"),
                 "never_inside": len(exams) == 0,
+                # Naechste Annaeherung des Tages, auch in ATR: erst das
+                # Verhaeltnis macht sie vergleichbar. 25 Punkte sind beim
+                # Nasdaq ein Drittel einer Kerze, beim Dow ein Vielfaches.
+                "near": lv.get("near"),
+                "near_atr": (lv["near"] / atr) if (lv.get("near") is not None and atr) else None,
             })
         out.sort(key=lambda x: x["price"], reverse=True)
         return {
