@@ -420,11 +420,49 @@ class Agent:
         if flip and spot:
             bias += (f" Kipp-Punkt: ein nachhaltiges Etablieren "
                      f"{'unter' if spot > flip else 'über'} {_px(flip, snap)} dreht das Bild.")
+        # Nachrichtenlage und Gamma zusammen gelesen. Der Ton der
+        # Schlagzeilen sagt nichts ueber die Richtung - er sagt, in
+        # welche Richtung eine Ueberraschung schwerer wiegt, und das
+        # verstaerkt oder daempft das Regime.
+        st = snap.get("sentiment") or {}
+        if st.get("n", 0) >= 3 and abs(st.get("saldo", 0)) > 0.25:
+            neg = st["saldo"] < 0
+            if regime == "short":
+                bias += (f" Die Nachrichtenlage ist {st['label']}; im Short-Gamma "
+                         f"trifft eine Überraschung auf Dealer, die mitziehen — "
+                         f"{'Abwärtsbewegungen' if neg else 'Aufwärtsbewegungen'} "
+                         f"laufen dann weiter als sonst.")
+            else:
+                bias += (f" Die Nachrichtenlage ist {st['label']}, das Long-Gamma "
+                         f"dämpft sie aber: Dealer handeln gegen den ersten Impuls.")
+        hoch = [e for e in (snap.get("calendar") or []) if e.get("impact") == "High"]
+        if hoch:
+            bias += (f" {hoch[0]['title']} steht an — bis dahin taugt jede "
+                     f"Prognose nur unter Vorbehalt.")
+
+        # Marken mit dem Gamma, das an ihnen haengt - nach Naehe geordnet.
+        # Das ist der Kern: ein Vortageshoch ist eine Zahl aus der
+        # Vergangenheit, ein Vortageshoch mit dem Vierfachen des
+        # aktuellen Gammas ist eine Kante, an der Dealer handeln muessen.
+        marken = []
+        for x in (snap.get("level_gex") or [])[:6]:
+            d = x["price"] - (spot or 0)
+            marken.append(
+                f"{x['label']} {_px(x['price'], snap)} "
+                f"({_fmt(abs(d))} Pkt {'über' if d > 0 else 'unter'} dem Kurs): "
+                f"{x.get('verdict') or ''}")
 
         watch = []
-        for z in zs[:3]:
+        for z in zs[:2]:
             watch.append(f"Reaktion an Zone #{z.get('rank')} {_px(z['bot'], snap)}–{_px(z['top'], snap)}: "
                          f"hält die Kante oder bricht sie?")
+        # Zusammenfall von Strukturmarke und Gamma-Nullstelle - das ist
+        # die Stelle, an der zwei unabhaengige Gruende dasselbe sagen.
+        pivots = [x for x in (snap.get("level_gex") or [])
+                  if x.get("is_pivot") and x.get("kind") != "flip"]
+        for x in pivots[:2]:
+            watch.append(f"{x['label']} {_px(x['price'], snap)} faellt mit der "
+                         f"Gamma-Nullstelle zusammen — zwei Gründe für dieselbe Marke.")
         if snap.get("max_pain") and spot:
             d = snap["max_pain"] - spot
             watch.append(f"Max Pain {_px(snap['max_pain'], snap)} liegt {_fmt(abs(d))} Punkte "
@@ -432,8 +470,14 @@ class Agent:
         for e in snap.get("calendar", [])[:2]:
             watch.append(f"{e['title']} in {e['in_minutes']} Minuten ({e['impact']}).")
 
+        st = snap.get("sentiment") or {}
         nachrichten = [h["title"] for h in snap.get("headlines", [])[:4]] or \
                       ["Keine index-relevante Schlagzeile im Filter."]
+        if st.get("n"):
+            nachrichten.insert(0,
+                f"Grundton: {st['label']} ({st['n']} Schlagzeilen, "
+                f"{st['up']} positiv, {st['down']} negativ getönt) — "
+                f"ausgezählt, nicht gedeutet.")
 
         return {
             "rueckblick": (
@@ -443,6 +487,7 @@ class Agent:
                    if atr_v and snap.get('on_high') and snap.get('on_low') else ".")),
             "nachrichten": nachrichten,
             "struktur": struktur,
+            "marken": marken,
             "bias": bias,
             "watch": watch,
         }

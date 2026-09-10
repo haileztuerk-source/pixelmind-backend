@@ -298,6 +298,9 @@ canvas{display:block;width:100%;height:100%}
 .plan p{font-size:13.5px;line-height:1.62;margin:0 0 8px}
 .plan ul{margin:0;padding-left:18px}
 .plan li{font-size:13.5px;line-height:1.6;margin-bottom:7px}
+.plan .hint{margin:6px 0 2px;padding:9px 11px;border-radius:9px;
+  background:var(--panel-2);border:1px solid var(--line-soft);
+  font-size:11px;color:var(--ink-faint);line-height:1.5}
 .bias{display:inline-block;font-size:12px;font-weight:700;background:rgba(224,169,60,.13);
   border:1px solid rgba(224,169,60,.35);color:var(--resist);padding:6px 12px;border-radius:9px;margin-bottom:9px}
 .upd{border-left:3px solid var(--agent);background:var(--panel-2);border-radius:0 10px 10px 0;
@@ -1844,6 +1847,11 @@ function renderPlan(){
     <h4>Rückblick</h4><p>${esc(b.rueckblick)}</p>
     <h4>Nachrichtenlage</h4><ul>${(b.nachrichten||[]).map(x=>`<li>${esc(x)}</li>`).join("")}</ul>
     <h4>Struktur &amp; Levels</h4><ul>${(b.struktur||[]).map(x=>`<li>${esc(x)}</li>`).join("")}</ul>
+    ${(b.marken||[]).length?`<h4>Marken und das Gamma daran</h4>
+      <ul>${b.marken.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>
+      <div class="hint">Gemessen wird das Netto-Gamma der ganzen Kette an diesem Preis,
+        nicht die Strikes in der Nähe — eine weit entfernte Wand mit großem Bestand
+        wirkt hier noch, eine nahe mit leerem Bestand gar nicht.</div>`:""}
     <h4>Tages-Bias</h4><div class="bias">${esc(b.bias.split(".")[0])}</div><p>${esc(b.bias)}</p>
     <h4>Worauf achten</h4><ul>${(b.watch||[]).map(x=>`<li>${esc(x)}</li>`).join("")}</ul>
     ${(p.updates||[]).length?"<h4>Anpassungen im Tagesverlauf</h4>"+p.updates.map(u=>

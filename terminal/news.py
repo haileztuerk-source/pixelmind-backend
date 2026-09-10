@@ -1,5 +1,6 @@
 """Nachrichtenlage: Wirtschaftskalender und Schlagzeilen, beide keyfrei."""
 
+import re
 import time
 import threading
 import xml.etree.ElementTree as ET
@@ -111,6 +112,73 @@ def headlines(limit=12):
     return out
 
 
+# Woerter, die in Finanzschlagzeilen eine Richtung tragen. Bewusst kurz
+# und bewusst nur Schlagworte - das ist eine Auszaehlung, keine
+# Sprachanalyse, und wird auch so benannt.
+TONE_UP = ("rally", "surge", "jump", "gain", "rise", "rises", "climb", "soar",
+           "beat", "beats", "record", "high", "optimism", "upgrade", "boost",
+           "strong", "stronger", "cut", "cuts", "dovish", "recover", "rebound")
+TONE_DOWN = ("fall", "falls", "drop", "drops", "slide", "slump", "plunge",
+             "sink", "tumble", "loss", "losses", "miss", "misses", "fear",
+             "fears", "warn", "warns", "warning", "downgrade", "weak",
+             "weaker", "hike", "hikes", "hawkish", "recession", "selloff",
+             "retreat", "threat", "threatening", "concern", "concerns")
+
+
+_WORDS = re.compile(r"[a-z]+")
+_UP = frozenset(TONE_UP)
+_DOWN = frozenset(TONE_DOWN)
+
+
+def sentiment(items=None):
+    """Grundton der Schlagzeilen - als AUSZAEHLUNG, nicht als Analyse.
+
+    Bewusst nur ein Wortabgleich. Ein Sprachmodell koennte den Ton besser
+    treffen, aber es braucht einen Schluessel und es kann halluzinieren;
+    eine Auszaehlung kann nur zaehlen. Sie wird deshalb auch so
+    ausgewiesen - "8 Schlagzeilen, 3 negativ getoent" ist eine
+    nachpruefbare Aussage, "die Stimmung ist schlecht" waere eine
+    Behauptung.
+
+    Der Ton der Nachrichten sagt ohnehin nichts ueber die Richtung des
+    Marktes. Er sagt, in welche Richtung eine Ueberraschung schwerer
+    wiegt - und das ist genau die Groesse, die neben dem Gamma-Regime
+    etwas taugt.
+    """
+    items = headlines() if items is None else items
+    up = dn = 0
+    getoent = []
+    for h in items:
+        t = (h.get("title") or "").lower()
+        # Ganze Woerter, keine Teilstrings. Gemessen an einer echten
+        # Schlagzeile: "the likelihood of a Fed interest rate HIKE next
+        # week just got a lot HIGHER" - "higher" enthaelt "high" aus der
+        # positiven Liste und hob "hike" aus der negativen auf. Die
+        # Zeile ging als neutral durch, obwohl sie das Gegenteil sagt.
+        w = set(_WORDS.findall(t))
+        u = len(w & _UP)
+        d = len(w & _DOWN)
+        if u > d:
+            up += 1; getoent.append({**h, "tone": "up"})
+        elif d > u:
+            dn += 1; getoent.append({**h, "tone": "down"})
+        else:
+            getoent.append({**h, "tone": "flat"})
+    n = len(items)
+    saldo = (up - dn) / n if n else 0.0
+    if n < 3:
+        label = "zu wenige Schlagzeilen für einen Grundton"
+    elif saldo > 0.25:
+        label = "überwiegend positiv getönt"
+    elif saldo < -0.25:
+        label = "überwiegend negativ getönt"
+    else:
+        label = "gemischt"
+    return {"n": n, "up": up, "down": dn, "saldo": round(saldo, 2),
+            "label": label, "items": getoent}
+
+
 def digest():
-    """Ein Block fuer den Agenten: Kalender plus Schlagzeilen."""
-    return {"calendar": calendar(), "headlines": headlines()}
+    """Ein Block fuer den Agenten: Kalender, Schlagzeilen, Grundton."""
+    hl = headlines()
+    return {"calendar": calendar(), "headlines": hl, "sentiment": sentiment(hl)}

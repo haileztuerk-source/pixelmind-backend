@@ -190,7 +190,26 @@ def build_snapshot(key, interval="15m"):
             else (gexp.get("spot") if gexp.get("ok") else None)
             or (bars[-1]["c"] if bars else None))
 
+    # Vortagsprofil aus dem Gedaechtnis des Zonenbuchs dazunehmen - es
+    # laesst sich aus keiner freien Quelle nachtraeglich holen.
+    vprev = (BOOK.view(key, {"spot": spot}) or {}).get("va_prev") or {}
+    if vprev.get("poc"):
+        session = dict(session, pdpoc=vprev.get("poc"),
+                       pdvah=vprev.get("vah"), pdval=vprev.get("val"))
+
     zone_list, levels = zones.build(gexp, vp, session, atr_v, spot) if spot else ([], [])
+
+    # Wieviel Dealer-Gamma haengt an jeder entscheidenden Marke? Das ist
+    # es, was ein Level von einer Zahl zu einer Erwartung macht - ein
+    # Vortageshoch mit stuetzendem Gamma ist eine Kante, dasselbe Hoch
+    # ohne Gamma nur eine Linie.
+    lgex = []
+    if spot and gexp.get("ok") and levels:
+        lgex = gex.level_gamma(chain.get("contracts") or [], levels, spot,
+                               flip=gexp.get("flip"), atr=atr_v)
+        for x in lgex:
+            x["verdict"] = gex.level_verdict(x, spot, gexp.get("regime"))
+        lgex.sort(key=lambda x: abs(x["price"] - spot))
     digest = news.digest()
 
     snap = {
@@ -206,8 +225,10 @@ def build_snapshot(key, interval="15m"):
         "session": session,
         "zones": zone_list,
         "levels": levels,
+        "level_gex": lgex,
         "calendar": digest["calendar"],
         "headlines": digest["headlines"],
+        "sentiment": digest.get("sentiment") or {},
         "ts": datetime.now(timezone.utc).isoformat(),
         # Der Chart ist live, sobald die Bruecke laeuft. Die Waende
         # bleiben verzoegert - Open Interest aendert sich nicht im

@@ -17,6 +17,10 @@ WEIGHTS = {
     "poc": 2.0, "vah": 1.5, "val": 1.5,
     "pdh": 1.5, "pdl": 1.5, "pwh": 1.0, "pwl": 1.0,
     "on_high": 1.0, "on_low": 1.0,
+    # Vortagsprofil: derselbe Rang wie das heutige. Der POC von gestern
+    # ist der Preis, an dem der Markt zuletzt am laengsten stand - dass
+    # er einen Tag alt ist, macht ihn nicht schwaecher.
+    "pdpoc": 2.0, "pdvah": 1.5, "pdval": 1.5,
 }
 
 LABELS = {
@@ -24,6 +28,7 @@ LABELS = {
     "max_pain": "Max Pain", "gamma_pin": "Gamma-Pin",
     "poc": "POC", "vah": "VAH", "val": "VAL",
     "pdh": "Vortageshoch", "pdl": "Vortagestief",
+    "pdpoc": "POC Vortag", "pdvah": "VAH Vortag", "pdval": "VAL Vortag",
     "pwh": "Vorwochenhoch", "pwl": "Vorwochentief",
     "on_high": "Tageshoch", "on_low": "Tagestief",
 }
@@ -49,7 +54,8 @@ def collect(gexp, vp, session):
 
     for k in ("poc", "vah", "val"):
         add(k, (vp or {}).get(k))
-    for k in ("pdh", "pdl", "pwh", "pwl", "on_high", "on_low"):
+    for k in ("pdh", "pdl", "pwh", "pwl", "on_high", "on_low",
+              "pdpoc", "pdvah", "pdval"):
         add(k, (session or {}).get(k))
     return out
 

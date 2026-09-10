@@ -134,6 +134,107 @@ def zero_gamma(contracts, spot, span=0.06, steps=41):
     return flip, curve
 
 
+def level_gamma(contracts, levels, spot, flip=None, atr=None):
+    """Wieviel Dealer-Gamma haengt an jedem dieser Preise - und in welche
+    Richtung wirkt es dort?
+
+    Das ist die Frage, die ein Level erst zu einer Aussage macht. Ein
+    Vortageshoch ist eine Zahl aus der Vergangenheit; ein Vortageshoch,
+    an dem 2 Mio Dollar Gamma je Punkt POSITIV haengen, ist eine Kante,
+    an der Dealer gegen die Bewegung handeln muessen. Dasselbe Hoch mit
+    negativem Gamma ist eine Kante, an der sie mitziehen - und dann
+    traegt der Ausbruch statt der Ablehnung.
+
+    Gerechnet wird nicht "welche Strikes liegen in der Naehe", sondern
+    das Netto-Gamma der GANZEN Kette, ausgewertet an diesem Preis. Der
+    Unterschied ist wesentlich: ein Strike weit weg mit riesigem Bestand
+    wirkt auch hier noch, ein naher mit leerem Bestand gar nicht.
+
+    Dazu die Steigung. Sie sagt, was beim DURCHLAUFEN passiert - ob das
+    Gamma jenseits der Kante zunimmt (die Bewegung laeuft sich fest) oder
+    abnimmt (sie beschleunigt). Ein Level, an dem das Vorzeichen kippt,
+    ist etwas anderes als eines mitten im Long-Gamma-Bereich.
+    """
+    out = []
+    if not contracts or not levels:
+        return out
+    # Fensterbreite fuer die Steigung: eng genug, dass sie oertlich ist.
+    # Ein erster Versuch nahm 0,4 Prozent des Kurses - bei NDX 116 Punkte.
+    # Damit lag die Nullstelle innerhalb des Fensters von fuenf
+    # verschiedenen Marken, und alle fuenf meldeten "das Vorzeichen kippt
+    # genau hier". Es kippt aber nur an einer Stelle.
+    tol = max(0.25 * (atr or 0.0), (spot or 1.0) * 0.0008)
+    for lv in levels:
+        p = lv.get("price")
+        if not p or p <= 0:
+            continue
+        d = max(0.1 * (atr or 0.0), p * 0.0005)
+        g = net_gex_at(contracts, p)
+        g_lo = net_gex_at(contracts, p - d)
+        g_hi = net_gex_at(contracts, p + d)
+        out.append({
+            **lv,
+            "gex": g,
+            # Aenderung je Indexpunkt beim Durchlaufen der Kante
+            "slope": (g_hi - g_lo) / (2.0 * d),
+            # Pivot heisst: die Marke IST die Nullstelle, nicht bloss in
+            # ihrer Naehe. Gemessen gegen den bereits gerechneten Flip -
+            # ihn aus dem Vorzeichenwechsel eines Fensters neu abzuleiten
+            # war die Quelle des Fehlers.
+            "is_pivot": (flip is not None
+                         and abs(p - flip) <= tol),
+            "side": "above" if (spot and p > spot) else "below",
+        })
+    # Bezug ist das Gamma AM KURS, nicht das groesste unter den Marken.
+    #
+    # Gegen das Maximum gemessen sah es falsch aus: in einer
+    # Long-Gamma-Struktur waechst das Gamma mit dem Abstand, also gewann
+    # immer die entfernteste Wand. Gemessen bekam eine Call-Wand 396
+    # Punkte weiter 100 Prozent, waehrend POC und Value Area direkt am
+    # Kurs mit 6 und 7 Prozent als "kaum Gamma" durchgingen - obwohl
+    # dort gerade gehandelt wird.
+    #
+    # Am Kurs gemessen heisst die Zahl etwas: "an dieser Marke haengt
+    # doppelt so viel Gamma wie jetzt gerade" ist eine Aussage ueber die
+    # Kraft, gegen die der Kurs dort laufen wuerde.
+    ref = abs(net_gex_at(contracts, spot)) if spot else 0.0
+    ref = max(ref, 1.0)
+    for x in out:
+        x["gex_rel"] = abs(x["gex"]) / ref
+    return out
+
+
+def level_verdict(lv, spot, regime=None):
+    """Aus Lage und Gamma eine Erwartung - in einem Satz.
+
+    Bewusst zwei Groessen und nicht eine: WO das Level liegt entscheidet,
+    ob eine Reaktion Widerstand oder Unterstuetzung heisst; WIEVIEL Gamma
+    dort haengt entscheidet, ob ueberhaupt eine Reaktion zu erwarten ist.
+    Ein Level ohne Gamma ist eine Linie im Chart und sonst nichts.
+    """
+    g, rel = lv.get("gex") or 0.0, lv.get("gex_rel") or 0.0
+    oben = lv.get("side") == "above"
+    kante = "Widerstand" if oben else "Unterstützung"
+
+    # Der Vorzeichenwechsel steht VOR der Groesse. An einer Nullstelle
+    # ist das Gamma per Definition null - die Pruefung auf "wenig Gamma"
+    # zuerst liess ausgerechnet das Zero-Gamma als unbedeutend
+    # durchgehen, obwohl es der Punkt ist, an dem das Verhalten des
+    # Marktes kippt.
+    if lv.get("is_pivot"):
+        return ("hier liegt die Nullstelle des Gammas — jenseits dieser "
+                "Marke verhaelt sich der Markt anders herum")
+    if rel < 0.4:
+        return ("wenig Gamma gegen den Kurs — die Marke traegt hier "
+                "kaum, der Kurs kann durchlaufen")
+    wucht = ("das %.1f-fache des Gammas am Kurs" % rel) if rel >= 1.2 else "vergleichbares Gamma"
+    if g > 0:
+        return (f"{kante} mit stuetzendem Gamma ({wucht}): Dealer handeln dort "
+                f"gegen die Bewegung, Ablehnung ist wahrscheinlicher als Durchbruch")
+    return (f"{kante} mit beschleunigendem Gamma ({wucht}): Dealer ziehen dort "
+            f"mit, ein Durchbruch traegt eher als eine Ablehnung")
+
+
 def walls(rows, spot, count=3, window=0.06):
     """Staerkste OI-Strikes je Seite: Hauptwand plus Leiter dahinter.
 

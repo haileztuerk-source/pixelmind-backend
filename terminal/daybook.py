@@ -119,6 +119,19 @@ class DayBook:
                 "near_ts": None,
             })
 
+        # Die Value Area des abgelaufenen Tages sichern, BEVOR der neue
+        # Tag sie ueberschreibt.
+        #
+        # Sie laesst sich nicht nachtraeglich holen: Cboe liefert nur die
+        # laufende Sitzung, Yahoo drosselt Serverabfragen. Wer das
+        # Vortagsprofil will, muss es sich am Ende des Tages gemerkt
+        # haben - danach ist es fort. Deshalb wird es hier
+        # weitergereicht und nicht neu berechnet.
+        heute = m.get("va_today") or {}
+        if heute.get("day") and heute["day"] != day:
+            m["va_prev"] = heute
+        m["va_today"] = {}
+
         m["day"] = day
         m["levels"] = levels
         m["seen_t"] = None      # neuer Tag, neue Beobachtung
@@ -189,6 +202,13 @@ class DayBook:
 
             if not m["levels"]:
                 return self._view(key, snap)
+
+            # Laufend mitschreiben, was am Ende des Tages die Value Area
+            # des Vortages sein wird.
+            vp = snap.get("vp") or {}
+            if vp.get("poc"):
+                m["va_today"] = {"day": day, "poc": vp["poc"],
+                                 "vah": vp.get("vah"), "val": vp.get("val")}
 
             now = datetime.now(timezone.utc).timestamp()
             tol_touch = max(atr * TOUCH_ATR, spot * 0.0002)
@@ -293,6 +313,9 @@ class DayBook:
             "anchor_hour": ANCHOR_HOUR,
             "stale_since": m.get("stale_since"),
             "levels": out,
+            # Value Area des Vortages - erst ab dem zweiten Handelstag da,
+            # weil sie nur aus dem eigenen Gedaechtnis stammen kann.
+            "va_prev": m.get("va_prev") or {},
         }
 
     def view(self, key, snap):
