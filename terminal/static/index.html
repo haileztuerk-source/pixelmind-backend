@@ -300,6 +300,15 @@ canvas{display:block;width:100%;height:100%}
 .sh-n{padding:13px 18px;font-size:11.5px;color:var(--ink-faint);line-height:1.55;
   border-top:1px solid var(--line-soft)}
 
+/* Live-Punkt: gruen heisst Bruecke laeuft, grau heisst verzoegert */
+.livedot{width:7px;height:7px;border-radius:50%;display:inline-block;
+  margin:0 2px 0 6px;vertical-align:middle;background:var(--down)}
+.livedot.on{background:var(--pos);box-shadow:0 0 0 0 rgba(79,180,119,.55);
+  animation:lvp 2.4s ease-out infinite}
+@keyframes lvp{0%{box-shadow:0 0 0 0 rgba(79,180,119,.5)}
+  70%{box-shadow:0 0 0 7px rgba(79,180,119,0)}
+  100%{box-shadow:0 0 0 0 rgba(79,180,119,0)}}
+
 /* Preisraum messen */
 .sp-row{display:flex;align-items:center;gap:12px;padding:11px 18px;
   border-top:1px solid var(--line-soft)}
@@ -362,7 +371,7 @@ canvas{display:block;width:100%;height:100%}
 
 <header class="topbar" id="topbar">
   <button class="idbtn" id="idbtn">
-    <span class="nm" id="sym">NDX</span><span class="car">▾</span>
+    <span class="nm" id="sym">NDX</span><i class="livedot off" id="livedot"></i><span class="car">▾</span>
   </button>
   <span class="rg" id="regime"><i></i><span>…</span></span>
   <div class="price-wrap">
@@ -1253,6 +1262,16 @@ wrap.addEventListener("wheel",e=>{
 function render(){
   const d=S.data; if(!d) return;
   $("sym").textContent = d.space?.name || SYM[S.market] || S.market;
+  // Sichtbarer Unterschied zwischen live und verzoegert. Ein Chart, der
+  // aussieht wie ein Kurs und eine Viertelstunde alt ist, ist
+  // gefaehrlicher als einer, der sich als alt zu erkennen gibt.
+  const lv = $("livedot");
+  if(lv){
+    lv.className = "livedot " + (d.live?.live ? "on" : "off");
+    lv.title = d.live?.live
+      ? `Live aus ${esc(d.live.symbol||"der Brücke")} · Tick vor ${Math.round(d.live.tick_age||0)} s`
+      : `${d.delayed_minutes||15} Minuten verzögert${d.live?.reason?" — "+esc(d.live.reason):""}`;
+  }
   tickTo($("spot"), d.spot);
   const ov = S.overview.find(o=>o.key===S.market);
   const ch = $("chg");
@@ -1267,7 +1286,9 @@ function render(){
   $("meta").innerHTML =
     `${d.space?.name ? d.space.name+" "+sgn(Math.round(d.space.offset))
         +(d.space.stale?" ⚠":"")+" · " : ""}`+
-    `${d.bar_source?.source==="cboe"?"Cboe":"Yahoo"}${stale?" · STALE":""} · ATR ${fmt(d.atr)} · `+
+    `${d.live?.live ? "LIVE" : (d.bar_source?.source==="cboe"?"Cboe"
+        : d.bar_source?.source==="bridge"?"Bruecke":"Yahoo")}`+
+    `${stale?" · STALE":""} · ATR ${fmt(d.atr)} · `+
     `${d.bars.length} Kerzen${S.layers.profil && d.vp?.basis
       ? " · "+({cme:"CME-Volumen", etf:"Stückvolumen", options:"Optionsfluss", time:"Zeit je Preis"}[d.vp.basis] || d.vp.basis)
         + (d.vp.source ? " ("+esc(d.vp.source)+")" : "")

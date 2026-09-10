@@ -109,6 +109,32 @@ class Space:
         self._save()
         return {"ok": True, **self.get(market_key)}
 
+    def remember(self, market_key, name, offset, ref, min_gap=60.0):
+        """Haelt einen von der Bruecke gemessenen Versatz fest.
+
+        Faellt die Bruecke aus, ist der Broker-Kurs unbekannt - aber der
+        Versatz von eben ist immer noch die beste Schaetzung. Ohne dieses
+        Gedaechtnis spraengen beim Ausfall alle angezeigten Zahlen um
+        mehrere zehn Punkte in den Index-Preisraum zurueck. Wer in dem
+        Moment auf den Chart schaut, liest andere Zahlen als eine Sekunde
+        vorher, ohne dass sich der Markt bewegt haette - das ist
+        gefaehrlicher als eine leicht veraltete Basis.
+
+        Gedrosselt geschrieben: die Bruecke misst im Sekundentakt, aber
+        die Basis wandert in Stunden. Jede Sekunde in die Datenbank zu
+        schreiben waere reine Last ohne Gewinn.
+        """
+        rec = self._all().get(market_key) or {}
+        if time.time() - (rec.get("at") or 0) < min_gap:
+            return
+        self._all()[market_key] = {
+            "name": (name or "LIVE").strip()[:12],
+            "offset": float(offset), "ref": ref,
+            "quote": (ref + offset) if ref is not None else None,
+            "at": time.time(), "from": "bridge",
+        }
+        self._save()
+
     def clear(self, market_key):
         """Zurueck in den Index-Preisraum."""
         self._all().pop(market_key, None)

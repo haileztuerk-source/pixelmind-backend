@@ -7,6 +7,7 @@ schlafende Instanz keine Daten zieht.
 """
 
 import os
+import hmac
 import time
 import threading
 from datetime import datetime, timezone
@@ -20,6 +21,7 @@ from .daybook import BOOK
 from . import keepalive, store
 from .walltrail import TRAIL
 from .broker import SPACE
+from .live import FEED, token as live_token
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
@@ -59,6 +61,70 @@ def _active_markets():
         return [k for k, t in _active.items() if now - t < ACTIVE_TTL]
 
 
+def _live_chart(key, conf_chain, interval):
+    """Hauptchart aus der Bruecke, wenn sie laeuft - sonst nichts.
+
+    Die Kerzen kommen im Preisraum des gehandelten Instruments herein
+    (USTEC, NAS100), die Waende stehen im Preisraum des Index. Beide
+    muessen auf dieselbe Achse, sonst liegt eine Wand an der falschen
+    Kerze.
+
+    Umgerechnet werden die Kerzen, nicht die Waende: intern bleibt
+    alles im Index-Preisraum, damit Zonenbuch, Agent und Vergleiche
+    ueber Tage hinweg dieselben Zahlen behalten - auch dann noch, wenn
+    die Bruecke einmal ausfaellt. Die Anzeige legt den Versatz am Ende
+    wieder drauf, sodass der Nutzer seine eigenen Kurse liest. Beides
+    zusammen ist verlustfrei: derselbe Wert wird abgezogen und wieder
+    addiert.
+
+    Die Basis wird SYNCHRON gemessen. Der Live-Kurs mit dem 15 Minuten
+    alten Indexkurs verglichen ergaebe nicht die Basis, sondern die
+    Basis plus eine Viertelstunde Marktbewegung - deshalb der Kurs des
+    Instruments aus genau jener Minute.
+    """
+    st = FEED.state(key)
+    if not st.get("live"):
+        return None
+    raw = FEED.bars(key)
+    if len(raw) < 30:
+        return None
+
+    # Das Bezugspaar kommt aus EINER Quelle und EINER Minute: die letzte
+    # Cboe-Minutenkerze traegt Zeit und Indexkurs zusammen. Der Spot der
+    # Kette waere ungenauer - sein Zeitstempel ist ein Text, und ob er
+    # zum selben Moment gehoert, steht nirgends.
+    idx = cboe.intraday(conf_chain, ttl=45)[0]
+    if not idx:
+        return None
+    ref_t, ref_p = idx[-1]["t"], idx[-1]["c"]
+
+    then = FEED.at(key, ref_t)
+    if not then:
+        return None
+    offset = then - ref_p
+    index_spot = ref_p
+    if abs(offset) > index_spot * 0.01:
+        return None            # kein plausibler Basiswert, lieber verzichten
+
+    minutes = market._TF_MIN.get(interval, 15)
+    shifted = [{"t": b["t"], "v": b.get("v") or 0.0,
+                "o": b["o"] - offset, "h": b["h"] - offset,
+                "l": b["l"] - offset, "c": b["c"] - offset} for b in raw]
+    bars = cboe.aggregate(shifted, minutes) if minutes > 1 else shifted
+    if not bars:
+        return None
+    return {
+        "bars": bars,
+        "spot": (st["price"] - offset) if st.get("price") else bars[-1]["c"],
+        "offset": offset,
+        "ref": ref_p,
+        "symbol": st.get("symbol"),
+        "state": st,
+        "src": {"source": "bridge", "symbol": st.get("symbol") or "live",
+                "stale": False},
+    }
+
+
 def build_snapshot(key, interval="15m"):
     """Rechnet das vollstaendige Bild fuer einen Markt."""
     conf = market.MARKETS.get(key) or market.MARKETS[market.DEFAULT_MARKET]
@@ -66,6 +132,12 @@ def build_snapshot(key, interval="15m"):
     chain = cboe.chain(conf["chain"], ttl=120)
     gexp = gex.profile(chain)
     bars, src = market.bars(key, interval)
+
+    # Laeuft die Bruecke, ersetzt ihr Chart den oeffentlichen - er ist
+    # live und zeigt genau das Instrument, das gehandelt wird.
+    lc = _live_chart(key, conf["chain"], interval)
+    if lc:
+        bars, src = lc["bars"], lc["src"]
 
     # ATR bevorzugt aus Tagesbars; wenn Yahoo drosselt, aus der
     # Intraday-Spanne hochgerechnet statt auf null zu fallen.
@@ -112,7 +184,11 @@ def build_snapshot(key, interval="15m"):
     if tpo:
         tpo["source"] = tsrc
 
-    spot = (gexp.get("spot") if gexp.get("ok") else None) or (bars[-1]["c"] if bars else None)
+    # Der Spot kommt aus der Bruecke, wenn sie laeuft: er ist der Kurs von
+    # jetzt, der Kettenspot der von vor einer Viertelstunde.
+    spot = (lc["spot"] if lc
+            else (gexp.get("spot") if gexp.get("ok") else None)
+            or (bars[-1]["c"] if bars else None))
 
     zone_list, levels = zones.build(gexp, vp, session, atr_v, spot) if spot else ([], [])
     digest = news.digest()
@@ -133,7 +209,12 @@ def build_snapshot(key, interval="15m"):
         "calendar": digest["calendar"],
         "headlines": digest["headlines"],
         "ts": datetime.now(timezone.utc).isoformat(),
-        "delayed_minutes": 15,
+        # Der Chart ist live, sobald die Bruecke laeuft. Die Waende
+        # bleiben verzoegert - Open Interest aendert sich nicht im
+        # Sekundentakt, dort kostet die Viertelstunde nichts.
+        "delayed_minutes": 0 if lc else 15,
+        "live": dict(lc["state"], offset=lc["offset"]) if lc
+                else FEED.state(key),
     }
     # Session-Marken flach mitfuehren, damit Agent und Frontend sie ohne
     # Umweg ueber das verschachtelte Dict lesen koennen.
@@ -185,7 +266,23 @@ def build_snapshot(key, interval="15m"):
     # im Index-Preisraum, das Frontend verschiebt allein die ausgegebenen
     # Zahlen. Wer hier die Preise selbst verschoebe, haette zwei
     # Umrechnungen im Umlauf - siehe terminal/broker.py.
-    snap["space"] = SPACE.get(key)
+    # Anzeige-Preisraum. Laeuft die Bruecke, misst sie ihn selbst und
+    # laufend - dann braucht es keine Ablesung von Hand mehr, und der
+    # Versatz kann auch nicht veralten. Sonst gilt die gespeicherte
+    # Messung.
+    if lc:
+        # Auch festhalten: faellt die Bruecke aus, bleibt die Anzeige im
+        # Preisraum des Brokers stehen, statt um mehrere zehn Punkte
+        # zurueckzuspringen.
+        SPACE.remember(key, lc["symbol"], lc["offset"], lc["ref"])
+        snap["space"] = {
+            "name": lc["symbol"] or "LIVE",
+            "offset": lc["offset"],
+            "at": time.time(), "age": 0.0, "stale": False,
+            "measured": "bridge",
+        }
+    else:
+        snap["space"] = SPACE.get(key)
     return snap
 
 
@@ -249,7 +346,8 @@ def state():
     # nehmen: der ist bis zu 25 Sekunden alt, und eine gerade gemessene
     # Kalibrierung soll sofort greifen und nicht erst beim naechsten
     # Neuaufbau. Er kostet nichts - es ist ein Nachschlagen im Speicher.
-    snap["space"] = SPACE.get(key)
+    if (snap.get("space") or {}).get("measured") != "bridge":
+        snap["space"] = SPACE.get(key)
     if request.args.get("light") == "1":
         for k in ("bars", "rows", "curve", "leading_walls", "tpo"):
             snap.pop(k, None)
@@ -308,6 +406,63 @@ def book():
     if not key:
         return jsonify({"error": "unbekannter Markt"}), 400
     return jsonify(BOOK.view(key, snapshot(key)))
+
+
+def _live_ok():
+    """Prueft das Geheimnis der Bruecke.
+
+    Vergleich in konstanter Zeit: ein Vergleich, der beim ersten
+    abweichenden Zeichen abbricht, verraet ueber die Antwortzeit, wie
+    viele Zeichen stimmten - damit laesst sich ein Geheimnis Zeichen fuer
+    Zeichen erraten.
+    """
+    want = live_token()
+    if not want:
+        return False        # ohne Geheimnis geschlossen, nicht offen
+    got = (request.headers.get("X-Live-Token")
+           or (request.args.get("token") or ""))
+    return hmac.compare_digest(want, got)
+
+
+@app.route("/api/live/bars", methods=["POST"])
+def live_bars():
+    """Kerzen der Bruecke: die Historie des gehandelten Instruments."""
+    if not _live_ok():
+        return jsonify({"error": "nicht berechtigt"}), 403
+    key = _market_arg()
+    if not key:
+        return jsonify({"error": "unbekannter Markt"}), 400
+    body = request.get_json(silent=True) or {}
+    n = FEED.put_bars(key, body.get("symbol"), body.get("bars"))
+    if not n:
+        return jsonify({"ok": False, "error": "keine brauchbaren Kerzen"}), 400
+    return jsonify({"ok": True, "bars": n})
+
+
+@app.route("/api/live/tick", methods=["POST"])
+def live_tick():
+    """Der letzte Kurs. Formt die laufende Kerze weiter."""
+    if not _live_ok():
+        return jsonify({"error": "nicht berechtigt"}), 403
+    key = _market_arg()
+    if not key:
+        return jsonify({"error": "unbekannter Markt"}), 400
+    body = request.get_json(silent=True) or {}
+    if not FEED.put_tick(key, body.get("symbol"), body.get("price"),
+                         body.get("ts")):
+        return jsonify({"ok": False, "error": "Kurs nicht lesbar"}), 400
+    return jsonify({"ok": True, **FEED.state(key)})
+
+
+@app.route("/api/live")
+def live_state():
+    """Zustand der Bruecke - ohne Geheimnis lesbar, es steht nichts drin."""
+    key = _market_arg()
+    if not key:
+        return jsonify({"error": "unbekannter Markt"}), 400
+    st = FEED.state(key)
+    st["configured"] = bool(live_token())
+    return jsonify(st)
 
 
 @app.route("/api/space", methods=["GET", "POST", "DELETE"])
