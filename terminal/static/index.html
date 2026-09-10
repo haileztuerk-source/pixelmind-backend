@@ -30,6 +30,7 @@
   --support:#A97BE8;  /* Put-Seite, Support */
   --pivot:#CFC6B2;    /* Pivot, Zero-Gamma, Max Pain */
   --struct:#5B6A7D;   /* Struktur: POC, Vortagesmarken */
+  --va:#9E4756;       /* Value Area: wo 70 % des Volumens liefen */
 
   /* ── Stimme ────────────────────────────────────────────────────────
      Der Agent bekommt das freigewordene Tuerkis. Kuehl, klar von Gold
@@ -393,7 +394,7 @@ canvas{display:block;width:100%;height:100%}
 
 const S = {
   market:"NQ", tf:"15m", data:null, plan:null, messages:[], overview:[],
-  view:0, profileMode:"heat", layers:{gpbox:true, gcurve:false, orbs:true, fix:true, live:true, zonen:true, profil:true, session:true},
+  view:0, profileMode:"heat", layers:{va:true, gpbox:true, gcurve:false, orbs:true, fix:true, live:true, zonen:true, profil:true, session:true},
   fitAll:false, immersive:false, lastMsgCount:0, busy:false, cross:null, trails:null,
 };
 const TFS = ["1m","5m","15m","30m","1h","1d"];
@@ -628,11 +629,31 @@ function drawProfile(ctx, y, pw, ph, topPad, V){
   const rowH = Math.max(1.1, ph / (vp.bins_n || 180));
   const gold = [224,169,60], violet = [169,123,232], flat = [91,106,125];
 
-  // Value Area als ruhiger Grund hinter dem Profil
-  if(vp.val && vp.vah){
-    const y1=y(vp.vah), y2=y(vp.val);
-    ctx.fillStyle="rgba(224,169,60,.04)";
-    ctx.fillRect(0, Math.min(y1,y2), maxW, Math.abs(y2-y1));
+  // Value Area ueber die ganze Chartbreite, nicht nur hinter dem Profil.
+  // Sie ist eine Aussage ueber den Kursbereich, nicht ueber den Streifen:
+  // hier liefen 70 Prozent des Volumens, und der Kurs kehrt dorthin
+  // ueberdurchschnittlich oft zurueck.
+  if(S.layers.va && vp.val && vp.vah){
+    const y1=Math.min(y(vp.vah), y(vp.val)), y2=Math.max(y(vp.vah), y(vp.val));
+    const h=Math.abs(y2-y1);
+    const g=ctx.createLinearGradient(0,y1,0,y2);
+    g.addColorStop(0,   "rgba(158,71,86,.05)");
+    g.addColorStop(0.5, "rgba(158,71,86,.15)");
+    g.addColorStop(1,   "rgba(158,71,86,.05)");
+    ctx.fillStyle=g; ctx.fillRect(0, y1, pw, h);
+    // Kanten: VAH und VAL sind die Marken, an denen sich entscheidet,
+    // ob der Kurs in der Spanne bleibt oder sie verlaesst.
+    ctx.strokeStyle=V("--va"); ctx.globalAlpha=.55; ctx.lineWidth=1;
+    ctx.setLineDash([3,4]);
+    [y1,y2].forEach(yy=>{
+      const ly=snap(yy)+half();
+      ctx.beginPath(); ctx.moveTo(0,ly); ctx.lineTo(pw,ly); ctx.stroke();
+    });
+    ctx.setLineDash([]); ctx.globalAlpha=1;
+    ctx.font="8px "+V("--mono"); ctx.fillStyle=V("--va"); ctx.textAlign="right";
+    ctx.globalAlpha=.85;
+    ctx.fillText("VAH", pw-4, y1+10); ctx.fillText("VAL", pw-4, y2-4);
+    ctx.globalAlpha=1; ctx.textAlign="left";
   }
 
   vp.bins.forEach(b=>{
@@ -641,7 +662,7 @@ function drawProfile(ctx, y, pw, ph, topPad, V){
     let rgb, alpha;
     if(S.profileMode === "heat"){
       rgb = heat(b.w);                       // Farbe = Volumenstaerke
-      alpha = b.va ? 0.88 : 0.62;
+      alpha = b.va ? 0.92 : 0.55;
     } else {
       // Rollenfarben: Faerbung nach gehandelter Optionsseite
       const t = (b.c - 0.5) * 2;             // -1 Put .. +1 Call
@@ -1367,7 +1388,8 @@ $("idbtn").onclick=()=>{
 };
 
 function layerSheet(){
-  const items=[["gpbox","GP-Beschriftung","Kasten am Level statt nur an der Skala"],
+  const items=[["va","Value Area","wo 70 % des Volumens liefen"],
+               ["gpbox","GP-Beschriftung","Kasten am Level statt nur an der Skala"],
                ["gcurve","Gamma-Kurve","nur beim Herauszoomen aussagekräftig"],
                ["orbs","Wand-Verlauf","Orb-Ketten aus allen Optionsketten"],
                ["fix","Fixe Level","aus dem Zonenbuch"],

@@ -78,7 +78,15 @@ gleicher Summe. Jeder Balken faerbt sich deshalb zwischen Tuerkis
 Gemessen am POC einer Sitzung: **37 Prozent Call gegen 63 Prozent Put** -
 an dieser Marke wurde ueberwiegend auf der Put-Seite gehandelt.
 
-Dazu markiert: Value Area als Grund, POC als Linie mit Beschriftung,
+Die **Value Area** liegt als getoentes Band ueber der ganzen Chartbreite,
+mit VAH und VAL als gestrichelten Kanten. Sie ist eine Aussage ueber den
+Kursbereich, nicht ueber den Profilstreifen: hier liefen 70 Prozent des
+Volumens, und der Kurs kehrt ueberdurchschnittlich oft dorthin zurueck.
+
+Das Weinrot ist bewusst dunkler und weniger gesaettigt als das Signalrot
+der Zustandsfarbe - beide muessen nebeneinander bestehen koennen.
+
+Dazu markiert: POC als Linie mit Beschriftung,
 HVN-Knoten als Strich am linken Rand, LVN-Vakuum gestrichelt. Knoten
 sind lokale Maxima ueber dem 1,4-fachen Mittel, Vakuum lokale Minima
 unter dem 0,45-fachen.
@@ -162,6 +170,7 @@ und fuer den Agenten, also fuer vier Dinge gleichzeitig.
 | `#A97BE8` | Violett | Put-Seite, Support |
 | `#CFC6B2` | Bein | Pivot: Zero-Gamma, Max Pain, Gamma-Pin |
 | `#5B6A7D` | Schiefer | Struktur: POC, Vortagesmarken |
+| `#9E4756` | Weinrot | Value Area: wo 70 % des Volumens liefen |
 
 **Stimme** — `#46C4BC` Tuerkis, allein fuer den Agenten. Erscheint nie
 an einem Level.
