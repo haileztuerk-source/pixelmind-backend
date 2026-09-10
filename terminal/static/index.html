@@ -714,10 +714,12 @@ function heat(t){
           Math.round(a[2]+(b[2]-a[2])*k)];
 }
 
-function drawProfile(ctx, y, pw, ph, topPad, V){
+function drawProfile(ctx, y, pw, ph, topPad, V, loP, hiP){
   const vp = S.data.vp;
   const maxW = Math.min(pw*0.19, 74);
-  const rowH = Math.max(1.1, ph / (vp.bins_n || 180));
+  // Keine Untergrenze mehr: bei 1000 Baendern erzwang die alte Klemme
+  // von 1,1 Pixel eine Gesamthoehe von 1100 Pixeln auf 600 verfuegbaren.
+  const rowH = ph / (vp.bins_n || 1000);
   const gold = [224,169,60], violet = [169,123,232], flat = [91,106,125];
 
   // Value Area ueber die ganze Chartbreite, nicht nur hinter dem Profil.
@@ -747,23 +749,51 @@ function drawProfile(ctx, y, pw, ph, topPad, V){
     ctx.globalAlpha=1; ctx.textAlign="left";
   }
 
-  vp.bins.forEach(b=>{
-    const yy = y(b.p);
-    if(yy < topPad-1 || yy > topPad+ph+1 || b.w <= 0.004) return;
+  // Baender zeichnen. Bei 1000 Baendern ist eine Zeile auf dem Telefon
+  // etwa 0,6 CSS-Pixel hoch, auf einem 3x-Display also knapp zwei
+  // Geraetepixel. Deshalb hier KEIN Runden auf ganze Pixel: gerundet
+  // fielen fast zwei Drittel der Zeilen auf dieselbe Bildzeile und
+  // ueberschrieben einander, aus 1000 Baendern wurden sichtbar 600.
+  // Ungerundet mischt die Leinwand die Zeilen korrekt - das ist keine
+  // Unschaerfe, sondern die richtige Verkleinerung.
+  const W_ = vp.w || [], CS = vp.cs || [], nB = vp.bins_n || W_.length;
+  const bLo = vp.lo, bStep = vp.step;
+  const va0 = vp.va0 == null ? -1 : vp.va0, va1 = vp.va1 == null ? -2 : vp.va1;
+  // Nur die sichtbaren Baender durchlaufen. Der Preis ist linear im
+  // Index, also laesst sich der sichtbare Ausschnitt direkt ausrechnen,
+  // statt 1000 mal zu pruefen und zu verwerfen.
+  let i0 = Math.floor((loP - bLo)/bStep) - 1;
+  let i1 = Math.ceil((hiP - bLo)/bStep) + 1;
+  i0 = Math.max(0, i0); i1 = Math.min(nB-1, i1);
+  // Winziger Ueberstand, damit zwischen zwei Zeilen keine Haarlinie
+  // durchscheint, wo die Kantenglaettung beide zur Haelfte deckt.
+  const over = 0.5/dpr;
+  for(let i=i0;i<=i1;i++){
+    const w = W_[i]|0;
+    if(w <= 4) continue;
+    const yy = y(bLo + (i+0.5)*bStep);
+    const inVA = i >= va0 && i <= va1;
     let rgb, alpha;
     if(S.profileMode === "heat"){
-      rgb = heat(b.w);                       // Farbe = Volumenstaerke
-      alpha = b.va ? 0.92 : 0.55;
+      rgb = heat(w/1000);                    // Farbe = Volumenstaerke
+      alpha = inVA ? 0.92 : 0.55;
     } else {
-      // Rollenfarben: Faerbung nach gehandelter Optionsseite
-      const t = (b.c - 0.5) * 2;             // -1 Put .. +1 Call
+      // Rollenfarben: Faerbung nach gehandelter Optionsseite.
+      // Die Empfindlichkeit ist auf 25 Prozentpunkte um die Mitte
+      // gestellt, nicht auf die vollen 0 bis 100. Gemessen schwankt der
+      // Call-Anteil je Band real zwischen 31 und 59 Prozent - gegen die
+      // volle Skala gerechnet blieb davon ein Farbausschlag von einem
+      // Drittel uebrig und das ganze Profil sah einheitlich grau aus.
+      // 25 Prozent Call gegen 75 Prozent Call ist ein klarer Befund und
+      // darf die Farbe ausreizen.
+      const t = Math.max(-1, Math.min(1, ((CS[i]==null?50:CS[i]) - 50)/25));
       const to = t >= 0 ? gold : violet, k = Math.abs(t);
-      rgb = flat.map((f,i)=> Math.round(f + (to[i]-f)*k));
-      alpha = b.va ? 0.50 : 0.24;
+      rgb = flat.map((f,j)=> Math.round(f + (to[j]-f)*k));
+      alpha = inVA ? 0.50 : 0.24;
     }
     ctx.fillStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})`;
-    ctx.fillRect(0, snap(yy - rowH/2), maxW*b.w, Math.max(0.8, rowH));
-  });
+    ctx.fillRect(0, yy - rowH/2, maxW*w/1000, rowH + over);
+  }
 
   // POC: die Zeile, an der am meisten umging
   if(vp.poc){
@@ -920,7 +950,7 @@ function draw(){
   const pd=(hi-lo)*0.06||1; lo-=pd; hi+=pd;
   const y=p=>topPad+(hi-p)/(hi-lo)*ph, bw=pw/bars.length;
 
-  if(S.layers.profil && S.data.vp?.bins) drawProfile(ctx, y, pw, ph, topPad, V);
+  if(S.layers.profil && S.data.vp?.w) drawProfile(ctx, y, pw, ph, topPad, V, lo, hi);
   if(S.layers.tpo) drawTPO(ctx, y, pw, ph, topPad, V);
   if(S.layers.zonen) (S.data.zones||[]).forEach(z=>{
     const y1=y(z.top),y2=y(z.bot);
@@ -1074,10 +1104,29 @@ function draw(){
 
   ctx.fillStyle=V("--ink-faint"); ctx.font="9px "+V("--mono");
   const st=Math.max(1,Math.floor(bars.length/4));
+  // Beschriftung nach der tatsaechlichen Spanne, nicht nach dem Namen der
+  // Zeitebene. Vorher entschied allein S.tf==="1d" ueber Datum oder
+  // Uhrzeit - bei 573 Viertelstundenkerzen ueber sechs Tage stand damit
+  // nur die Tageszeit da und die Achse las sich rueckwaerts:
+  // 15:45, 13:30, 17:45, 15:30. Richtige Zeitpunkte, aber an
+  // verschiedenen Tagen, und ohne Datum nicht zu unterscheiden.
+  const spanD = bars.length > 1
+    ? (bars[bars.length-1].t - bars[0].t) / 86400 : 0;
+  const dOpt = {day:"2-digit", month:"2-digit"};
+  // Ueber ein Jahr hinaus braucht es das Jahr. Auf der Tagesebene lief
+  // die Achse ueber zwei Jahre und zeigte "10.09. · 12.03. · 10.09." -
+  // zwei verschiedene Septembertage, nicht zu unterscheiden.
+  const yOpt = {month:"2-digit", year:"2-digit"};
   for(let i=0;i<bars.length;i+=st){
     const d=new Date(bars[i].t*1000);
-    const lab = S.tf==="1d" ? d.toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit"})
-                            : d.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"});
+    const lab = spanD > 300
+      ? d.toLocaleDateString("de-DE", yOpt)
+      : (S.tf==="1d" || spanD > 5)
+      ? d.toLocaleDateString("de-DE", dOpt)
+      : spanD > 1.2
+        ? d.toLocaleDateString("de-DE", dOpt)+" "
+          + d.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})
+        : d.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"});
     let x=i*bw+bw/2; ctx.textAlign="center";
     if(x<24){x=2;ctx.textAlign="left";} else if(x>pw-24){x=pw-2;ctx.textAlign="right";}
     ctx.fillText(lab, x, H-PAD.b+13);

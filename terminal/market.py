@@ -152,7 +152,7 @@ def atr(bars, period=14):
     return sum(window) / len(window) if window else 0.0
 
 
-def volume_profile(bars, bins=180, kind="volume"):
+def volume_profile(bars, bins=1000, kind="volume"):
     """Volumenprofil mit Seitenaufteilung und Knotenerkennung.
 
     Deutlich feiner aufgeloest als ein blosser Streifen, und zweigeteilt:
@@ -239,6 +239,28 @@ def volume_profile(bars, bins=180, kind="volume"):
     price = lambda i: lo + (i + 0.5) * step
     peak = max(tot) or 1.0
 
+    # Bezugsgroesse fuer die Balkenbreite: NICHT das Maximum, sondern das
+    # 99. Perzentil der belegten Baender.
+    #
+    # Der Grund ist gemessen. Je feiner die Aufloesung, desto spitzer
+    # wird die staerkste einzelne Zeile - und weil alle anderen an ihr
+    # normiert werden, schrumpft das ganze Profil mit. Bei 180 Baendern
+    # liegt das mittlere Band bei 10,4 Prozent der Spitze, bei 1000 nur
+    # noch bei 4,7. Das Profil war bei voller Aufloesung sichtbar
+    # duenner als bei grober, obwohl es mehr Information trug: 99
+    # Prozent der Baender draengten sich in das untere Drittel der
+    # verfuegbaren Breite, die oberen zwei Drittel blieben fuer einen
+    # einzigen Ausreisser reserviert.
+    #
+    # Gegen das Perzentil normiert nutzt die Breite wieder ihren ganzen
+    # Bereich. Das oberste Prozent laeuft dabei an den Anschlag - beim
+    # POC ist das kein Verlust, denn dass er der staerkste Bereich ist,
+    # sagt ohnehin seine eigene Linie. `peak` bleibt als Rohwert erhalten.
+    nz = sorted(x for x in tot if x > 0)
+    ref = nz[min(len(nz) - 1, int(len(nz) * 0.99))] if nz else peak
+    ref = max(ref, peak * 0.05) or 1.0
+    wgt = lambda x: min(1.0, x / ref)
+
     # Knoten: lokale Maxima ueber dem Mittel, Vakuum: lokale Minima darunter.
     mean = total / bins
     hvn, lvn = [], []
@@ -247,11 +269,22 @@ def volume_profile(bars, bins=180, kind="volume"):
         seg = tot[i - win:i + win + 1]
         if tot[i] == max(seg) and tot[i] > mean * 1.4:
             if not hvn or abs(price(i) - hvn[-1]["p"]) > step * win:
-                hvn.append({"p": price(i), "w": tot[i] / peak})
+                hvn.append({"p": price(i), "w": wgt(tot[i])})
         if tot[i] == min(seg) and tot[i] < mean * 0.45 and lo_i < i < hi_i + win:
             if not lvn or abs(price(i) - lvn[-1]["p"]) > step * win:
-                lvn.append({"p": price(i), "w": tot[i] / peak})
+                lvn.append({"p": price(i), "w": wgt(tot[i])})
 
+    # Uebertragung als parallele Ganzzahl-Reihen statt als Liste von
+    # Objekten. Bei 180 Baendern war der Unterschied gleichgueltig, bei
+    # 1000 ist er es nicht: ein Objekt je Band mit ausgeschriebenem
+    # Preis, Gewicht, Call-Anteil und Value-Area-Flag kostet gemessen
+    # 89 KB je Abruf. Denselben Inhalt tragen zwei Zahlenreihen in rund
+    # 8 KB - der Preis folgt aus `lo` und `step`, die Value Area aus
+    # ihren beiden Randindizes.
+    #
+    # Aufloesung der Reihen: Gewicht in Promille der Spitze, Call-Anteil
+    # in Prozent. Beides feiner, als ein Bildschirm darstellen kann -
+    # ein Band ist auf dem Telefon knapp zwei Geraetepixel breit.
     return {
         "basis": basis,
         "poc": price(poc_i),
@@ -261,13 +294,12 @@ def volume_profile(bars, bins=180, kind="volume"):
         "peak": peak,
         "call_total": sum(call), "put_total": sum(put),
         "hvn": hvn[:6], "lvn": lvn[:4],
-        "bins": [{
-            "p": price(i),
-            "w": tot[i] / peak,
-            # Anteil der Call-Seite an diesem Band, 0.5 heisst ausgeglichen
-            "c": (call[i] / (call[i] + put[i])) if (call[i] + put[i]) > 0 else 0.5,
-            "va": lo_i <= i <= hi_i,
-        } for i in range(bins)],
+        # Gewicht je Band, 0..1000 = Anteil an der staerksten Zeile
+        "w": [int(round(wgt(tot[i]) * 1000)) for i in range(bins)],
+        # Anteil der Call-Seite je Band in Prozent, 50 heisst ausgeglichen
+        "cs": [int(round(call[i] / (call[i] + put[i]) * 100))
+               if (call[i] + put[i]) > 0 else 50 for i in range(bins)],
+        "va0": lo_i, "va1": hi_i,
     }
 
 
