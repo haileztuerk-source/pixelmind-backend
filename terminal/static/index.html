@@ -8,6 +8,12 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="ChartTerminal">
 <link rel="manifest" href="/manifest.webmanifest">
+<script>
+// Ohne registrierten Service Worker bietet Chrome auf Android die
+// Installation nicht an - Manifest und Icons allein genuegen nicht.
+if ("serviceWorker" in navigator)
+  addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(()=>{}));
+</script>
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="icon" href="/icon-192.png">
 <title>ChartTerminal</title>

@@ -26,6 +26,11 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false   # optional - ohne Key antwortet der Agent aus der Engine
+      # Gemeinsames Geheimnis der MT5-Bruecke. Ohne gesetzten Wert nimmt
+      # der Dienst gar keine Live-Kurse an - geschlossen, nicht offen.
+      # Denselben Wert traegt bridge/mt5_bridge.py auf dem PC.
+      - key: LIVE_TOKEN
+        sync: false
       - key: SCAN_INTERVAL
         value: "20"
       - key: AGENT_DAY_BUDGET
