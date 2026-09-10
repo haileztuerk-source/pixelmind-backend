@@ -100,16 +100,49 @@ body.immersive .tabbar{--hide:110%}
 .rg.short{color:var(--neg);border-color:rgba(229,112,90,.42);background:rgba(229,112,90,.11)}
 .rg i{width:5px;height:5px;border-radius:50%;background:currentColor}
 
-/* ============ Marktleiste ============ */
+/* ============ Marktleiste ============
+   Zwei Stufen. Eingeklappt eine schmale Zeile, die die Werte nur zeigt;
+   aufgeklappt die ausfuehrlichen Karten. Gemessen kostete die Leiste in
+   der alten Form 89 von 915 Bildpunkten - fast ein Zehntel des Bildes
+   fuer Zahlen, die man meistens nur streift. */
 .strip{
   position:fixed;top:var(--topbar-h,62px);left:0;right:0;z-index:31;
-  display:flex;gap:8px;padding:9px 14px;overflow-x:auto;scrollbar-width:none;
+  display:flex;align-items:flex-start;gap:4px;padding:6px 4px 6px 12px;
   background:color-mix(in srgb, var(--ground) 76%, transparent);
   backdrop-filter:blur(16px) saturate(1.3);-webkit-backdrop-filter:blur(16px) saturate(1.3);
   transition:transform .28s cubic-bezier(.32,.72,0,1), opacity .2s ease;
 }
-.strip::-webkit-scrollbar{display:none}
-.mchip{
+.striprow{
+  flex:1 1 auto;min-width:0;display:flex;gap:7px;
+  overflow-x:auto;scrollbar-width:none;
+}
+.striprow::-webkit-scrollbar{display:none}
+.stripx{
+  flex:none;width:40px;height:34px;border-radius:10px;border:1px solid var(--line-soft);
+  background:var(--panel-2);color:var(--ink-faint);font-size:13px;line-height:1;
+  transition:transform .22s cubic-bezier(.32,.72,0,1);
+}
+.strip.full .stripx{transform:rotate(180deg)}
+
+/* Eingeklappt: eine Zeile, nur lesen und antippen.
+   Die Veraenderung steht nicht als eigene Zahl daneben, sondern faerbt
+   den Kurs. Ausgeschrieben brauchte ein Wert 140 Bildpunkte und es
+   passten zweieinhalb in die Zeile - als Farbe sind es 90 und vier. Die
+   Richtung ist damit weiter da, sie kostet nur keine Breite mehr. */
+.strip.slim .mchip{
+  flex:none;display:flex;align-items:baseline;gap:6px;height:34px;
+  padding:0 10px;border-radius:9px;background:var(--panel-2);
+  border:1px solid var(--line-soft);
+}
+.strip.slim .mchip .k{font-size:11px}
+.strip.slim .mchip .p{font-size:12.5px;margin:0}
+.strip.slim .mchip .c{display:none}
+.strip.slim .mchip.up .p{color:var(--pos)}
+.strip.slim .mchip.dn .p{color:var(--neg)}
+
+/* Aufgeklappt: Karten wie bisher, umbrechend statt scrollend */
+.strip.full .striprow{flex-wrap:wrap;overflow:visible}
+.strip.full .mchip{
   flex:none;min-width:86px;padding:8px 11px;border-radius:12px;background:var(--panel-2);
   border:1px solid var(--line-soft);text-align:left;
 }
@@ -388,7 +421,10 @@ canvas{display:block;width:100%;height:100%}
   </div>
 </header>
 
-<nav class="strip" id="strip"></nav>
+<nav class="strip slim" id="strip">
+  <div class="striprow" id="striprow"></div>
+  <button class="stripx" id="stripx" aria-label="Marktleiste auf- und zuklappen">⌄</button>
+</nav>
 
 <main class="track" id="track">
   <section class="view chart" id="v-chart">
@@ -1500,11 +1536,17 @@ function renderTf(){
 }
 
 function renderStrip(){
-  const el=$("strip");
-  const src = S.overview.length ? S.overview
+  const el=$("striprow");
+  let src = S.overview.length ? S.overview
     : Object.keys(SYM).map(k=>({key:k,name:k,spot:null,change_pct:null}));
+  // Eingeklappt passen drei Werte in die Zeile, der Rest wird gescrollt.
+  // Der aktive Markt gehoert deshalb nach vorn - sonst kann ausgerechnet
+  // der, auf den der Chart laeuft, ausserhalb des Sichtbaren liegen.
+  if(!$("strip").classList.contains("full"))
+    src = [...src].sort((a,b)=> (b.key===S.market) - (a.key===S.market));
   el.innerHTML = src.map(m=>`
-    <button class="mchip ${m.key===S.market?"on":""}" data-m="${m.key}">
+    <button class="mchip ${m.key===S.market?"on":""} ${
+      m.change_pct==null?"":(m.change_pct>=0?"up":"dn")}" data-m="${m.key}">
       <div class="k">${m.key===S.market && S.data?.space?.name
         ? esc(S.data.space.name) : (SYM[m.key]||m.key)}</div>
       <div class="p tnum">${(m.key===S.market?px:fmt)(m.spot, m.spot&&m.spot<1000?1:0)}</div>
@@ -1516,6 +1558,24 @@ function renderStrip(){
   // Chart begaenne unter der Kopfzeile statt darunter.
   measureChrome(); draw();
 }
+
+/** Auf- und zuklappen. Der Zustand ueberlebt das Neuladen, weil er eine
+    Gewohnheit ist und keine Entscheidung, die man taeglich neu trifft. */
+function setStrip(open){
+  const el = $("strip");
+  el.classList.toggle("full", open);
+  el.classList.toggle("slim", !open);
+  try{ localStorage.setItem("stripOpen", open ? "1" : "0"); }catch(e){}
+  renderStrip();     // die Reihenfolge haengt am Zustand
+  // Die Leiste aendert ihre Hoehe, also muss der Chart neu vermessen
+  // werden - sonst zeichnet er unter oder ueber seinen Rahmen hinaus.
+  requestAnimationFrame(()=>{ measureChrome(); draw(); });
+}
+$("stripx").onclick = () => {
+  setStrip(!$("strip").classList.contains("full"));
+  buzz(6);
+};
+try{ setStrip(localStorage.getItem("stripOpen") === "1"); }catch(e){}
 
 function switchMarket(k){
   if(k===S.market) return;
