@@ -896,7 +896,13 @@ function orbSprite(color, r){
   const key = color+"|"+r+"|"+dpr;
   let sp = ORB_SPRITES.get(key);
   if(sp) return sp;
-  const pad = r*1.7, size = Math.ceil(pad*2*dpr);
+  // Eine Perle, kein Leuchten. Die Vorlage besteht aus abzaehlbaren
+  // Punkten mit klarer Kante; der weiche Verlauf von vorher liess sie zu
+  // einem durchgehenden Schlauch verschmelzen, in dem sich nichts mehr
+  // unterscheiden liess. Der Farbverlauf reicht deshalb nur noch knapp
+  // ueber den Rand - gerade genug gegen Treppenstufen, nicht so weit,
+  // dass benachbarte Perlen ineinanderlaufen.
+  const pad = r*1.22, size = Math.ceil(pad*2*dpr);
   const c = document.createElement("canvas");
   c.width = c.height = size;
   const g = c.getContext("2d");
@@ -904,15 +910,11 @@ function orbSprite(color, r){
   const cx = pad, cy = pad;
   const grad = g.createRadialGradient(cx,cy,0, cx,cy,pad);
   grad.addColorStop(0,    color);
-  grad.addColorStop(0.52, color);
-  grad.addColorStop(0.74, color+"55");
+  grad.addColorStop(0.80, color);
+  grad.addColorStop(0.92, color+"AA");
   grad.addColorStop(1,    color+"00");
   g.fillStyle = grad;
   g.beginPath(); g.arc(cx,cy,pad,0,6.2832); g.fill();
-  // harter Kern, damit die Kette bei kleinen Groessen nicht verwaescht
-  g.globalCompositeOperation = "source-over";
-  g.fillStyle = color;
-  g.beginPath(); g.arc(cx,cy,Math.max(0.6,r*0.55),0,6.2832); g.fill();
   sp = {canvas:c, pad};
   ORB_SPRITES.set(key, sp);
   return sp;
@@ -1007,10 +1009,13 @@ function drawOrbs(ctx, bars, y, bw, pw, ph, V, topPad){
     ? Math.max(alle[Math.min(alle.length-1, Math.floor(alle.length*0.95))], 1)
     : 0;
 
-  // Schrittweite: nie enger als vier Bildpunkte, sonst zeichnen sich die
-  // Orbs uebereinander und kosten nur Rechenzeit.
+  // Schrittweite: nie enger als fuenfeinhalb Bildpunkte. Bei vier lagen
+  // die Perlen in ruhigen Abschnitten so dicht, dass sie trotz Luecke zu
+  // einer Linie verschwammen - und eine Linie sagt nichts darueber, ob
+  // dort etwas geschah. Erst mit sichtbarem Abstand bleibt die Kette
+  // abzaehlbar, und genau das ist der Punkt an einer Perlenkette.
   const pxPerSec = (pw) / Math.max(1, (t1 - t0));
-  const step = Math.max(bucket, Math.ceil(4 / Math.max(pxPerSec, 1e-9) / bucket) * bucket);
+  const step = Math.max(bucket, Math.ceil(5.5 / Math.max(pxPerSec, 1e-9) / bucket) * bucket);
 
   walls.forEach(w=>{
     const yy = y(w.price);
@@ -1038,25 +1043,27 @@ function drawOrbs(ctx, bars, y, bw, pw, ph, V, topPad){
       // Das Fundament traegt die Groesse, der Puls legt darauf. So bleibt
       // die Wand auch in einer stillen Minute sichtbar, statt zu
       // verschwinden - sie ist ja weiter da, es geschieht nur nichts.
-      const r = Math.round((1.1 + 3.4*Math.sqrt(rel) + 2.6*imp) * 2) / 2;
+      //
+      // Die Untergrenze lag vorher bei 1,1 Bildpunkten, und damit hatte
+      // JEDE Wand zu JEDER Zeit dieselbe Mindestdicke: aus dem Band wurde
+      // ein durchgehender Schlauch, und eine schwache Wand sah aus wie
+      // eine mittlere. Jetzt faellt die Groesse bis fast auf null, und
+      // unterhalb einer halben Perle wird gar nicht gezeichnet - so
+      // entstehen die Luecken und die einzelnen Punkte der Vorlage.
+      const staerke = Math.pow(rel, 0.7);
+      const r = Math.round((0.35 + 4.2*staerke + 3.0*imp) * 2) / 2;
+      if(r < 0.5) continue;
       const sp = orbSprite(col, r);
       // Nicht gemessene Abschnitte deutlich zurueckgenommen: das Band
       // zeigt, DASS die Wand da ist, ohne eine Staerke zu behaupten,
       // die nicht erhoben wurde.
-      const base = measured ? (0.30 + 0.42*rel) : (0.17 + 0.30*rel);
-      ctx.globalAlpha = Math.min(1, base + 0.55*imp);
+      const base = measured ? (0.16 + 0.62*staerke) : (0.08 + 0.34*staerke);
+      ctx.globalAlpha = Math.min(1, base + 0.42*imp);
       ctx.drawImage(sp.canvas, x - sp.pad, yy - sp.pad, sp.pad*2, sp.pad*2);
-      // Kraeftiger Puls bekommt einen zweiten, weichen Aufschlag - das
-      // ist das Aufleuchten, das eine Stelle im Band vom Rest abhebt.
-      if(imp > 0.45){
-        const gl = orbSprite(col, r + 2.2 + 2.4*imp);
-        ctx.globalAlpha = 0.13 + 0.30*imp;
-        ctx.drawImage(gl.canvas, x - gl.pad, yy - gl.pad, gl.pad*2, gl.pad*2);
-      }
-      if(isIndex && measured != null && r > 2.5){
-        ctx.globalAlpha = 0.8; ctx.strokeStyle = col; ctx.lineWidth = 1/dpr*1.2;
-        ctx.beginPath(); ctx.arc(x, yy, r + 1.6, 0, 6.2832); ctx.stroke();
-      }
+      // Der Index-Ring blieb aus: er zog um jede kraeftige Perle einen
+      // zweiten Kreis und machte aus der klaren Kette wieder ein
+      // Geflimmer. Woher eine Wand stammt, sagt die Wandliste.
+      void isIndex;
     }
   });
   ctx.globalAlpha = 1;
