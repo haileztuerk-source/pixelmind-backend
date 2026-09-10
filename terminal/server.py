@@ -77,22 +77,40 @@ def build_snapshot(key, interval="15m"):
         session = {}
     session.update(market.overnight_range(bars))
 
-    # Volumenprofil aus dem Future: der Index selbst wird nicht gehandelt
-    # und hat kein Volumen. Faellt der Future aus, tritt das
-    # Optionsvolumen der Kette an - und wenn auch das fehlt, zaehlt das
-    # Profil Zeit je Preis. Alle drei Faelle werden benannt.
+    # Zwei getrennte Profile, weil es zwei verschiedene Fragen sind.
+    #
+    # Das Volumenprofil fragt: wo wurde WIEVIEL gehandelt. Es braucht
+    # echtes Tapevolumen - CME-Kontrakte aus dem Future, sonst das
+    # Stueckvolumen des ETF. Beides ist gehandeltes Volumen, nur an
+    # verschiedenen Boersen.
+    #
+    # Das TPO fragt: wo war der Markt WIE LANGE. Es braucht ueberhaupt
+    # kein Volumen, nur Hoch und Tief je Minute - und darf deshalb nie
+    # daran scheitern, dass eine Volumenquelle klemmt.
     idx_spot = gexp.get("spot") if gexp.get("ok") else None
-    pbars, pratio, psym = market.profile_bars(key, index_spot=idx_spot)
+    pbars, pratio, psym, pkind = market.profile_bars(key, index_spot=idx_spot)
     if pbars:
-        vp = market.volume_profile(pbars, kind="cme")
+        vp = market.volume_profile(pbars, kind=pkind)
         vp["source"] = psym
         vp["ratio"] = pratio
     else:
-        # Rueckfall: das Optionsvolumen der Kette, ebenfalls minuetlich.
+        # Kein gehandeltes Volumen erreichbar. Dann das Optionsvolumen
+        # der Kette - eine andere Groesse, und sie wird auch so benannt.
         raw, _stale = cboe.intraday(conf["chain"])
         vp = market.volume_profile(raw or bars, kind="options") if (raw or bars) else {}
         if vp:
             vp["source"] = conf["chain"]
+
+    # Eigene Quellenkette fuers TPO: die Cboe-Minutenbars liegen bereits
+    # im Preisraum des Index und beschreiben dieselbe Sitzung.
+    tbars, tsrc = pbars, psym
+    if not tbars:
+        tbars, _stale = cboe.intraday(conf["chain"])
+        tsrc = conf["chain"]
+    tpo = market.tpo_profile(tbars) if tbars else {}
+    if tpo:
+        tpo["source"] = tsrc
+
     spot = (gexp.get("spot") if gexp.get("ok") else None) or (bars[-1]["c"] if bars else None)
 
     zone_list, levels = zones.build(gexp, vp, session, atr_v, spot) if spot else ([], [])
@@ -107,6 +125,7 @@ def build_snapshot(key, interval="15m"):
         "bars": bars,
         "bar_source": src,
         "vp": vp,
+        "tpo": tpo,
         "session": session,
         "zones": zone_list,
         "levels": levels,
@@ -220,7 +239,7 @@ def state():
         return jsonify({"error": "unbekanntes Intervall"}), 400
     snap = dict(snapshot(key, interval))
     if request.args.get("light") == "1":
-        for k in ("bars", "rows", "curve", "leading_walls"):
+        for k in ("bars", "rows", "curve", "leading_walls", "tpo"):
             snap.pop(k, None)
     return jsonify(snap)
 

@@ -128,9 +128,19 @@ def chain(symbol, ttl=60, max_dte=90):
 def intraday(symbol, ttl=45):
     """Minutenbars der laufenden Cboe-Sitzung im Preisraum des Index.
 
-    Das Volumenfeld traegt beim Index kein Aktienvolumen, sondern das
-    gehandelte Optionsvolumen der Minute - fuer ein Volumenprofil sogar
-    die aussagekraeftigere Groesse, weil sie den 0DTE-Kampf abbildet.
+    Die Datei fuehrt zwei verschiedene Volumina, und der Unterschied ist
+    fuer das Profil entscheidend:
+
+    `stock_volume` ist gehandeltes Stueckvolumen - beim Index leer, beim
+    ETF (QQQ, SPY) das echte Tapevolumen der Minute. Das ist die Groesse,
+    die ein Volumenprofil braucht.
+
+    `total_options_volume` ist gehandeltes Optionsvolumen. Es gibt es
+    auch beim Index, wo es den 0DTE-Kampf abbildet - aber es ist eine
+    andere Aussage und darf nicht stillschweigend an die Stelle des
+    ersten treten.
+
+    Deshalb werden beide getrennt weitergereicht: `sv` und `v`.
     """
     data, stale = _fetch(f"charts/intraday/{symbol}", ttl)
     if not data:
@@ -144,14 +154,27 @@ def intraday(symbol, ttl=45):
             dt = datetime.fromisoformat(row["datetime"]).replace(tzinfo=timezone.utc)
         except (ValueError, KeyError, TypeError):
             continue
+        # Kaputte Kerzen aussortieren. Die Daten enthalten vereinzelt
+        # Zeilen mit low = 0 - bei GLD gemessen. Ein Preis von null ist
+        # bei einem gehandelten Papier unmoeglich, und eine solche Zeile
+        # ist nicht bloss ungenau: Volumenprofil und TPO spannen ihre
+        # Skala zwischen Tief und Hoch auf, also zwischen 0 und 406, und
+        # das ganze Profil faellt in ein einziges Band zusammen. Eine
+        # einzelne Zeile loescht damit die Aussage der uebrigen 388.
+        o, h, l, c = (p.get("open"), p.get("high"), p.get("low"), p["close"])
+        o, h, l = (o if o else c), (h if h else c), (l if l else c)
+        try:
+            o, h, l, c = float(o), float(h), float(l), float(c)
+        except (TypeError, ValueError):
+            continue
+        if min(o, h, l, c) <= 0 or h < l:
+            continue
         v = row.get("volume") or {}
         bars.append({
             "t": int(dt.timestamp()),
-            "o": float(p.get("open") or p["close"]),
-            "h": float(p.get("high") or p["close"]),
-            "l": float(p.get("low") or p["close"]),
-            "c": float(p["close"]),
+            "o": o, "h": h, "l": l, "c": c,
             "v": float(v.get("total_options_volume") or 0.0),
+            "sv": float(v.get("stock_volume") or 0.0),
             "cv": float(v.get("calls_volume") or 0.0),
             "pv": float(v.get("puts_volume") or 0.0),
         })
@@ -175,7 +198,8 @@ def aggregate(bars, minutes):
                       # Call- und Put-Volumen getrennt weiterreichen: daraus
                       # entsteht spaeter ein Profil, das nicht nur zeigt WO
                       # gehandelt wurde, sondern auf welcher Seite.
-                      "cv": b.get("cv", 0.0), "pv": b.get("pv", 0.0)}
+                      "cv": b.get("cv", 0.0), "pv": b.get("pv", 0.0),
+                      "sv": b.get("sv", 0.0)}
         else:
             bucket["h"] = max(bucket["h"], b["h"])
             bucket["l"] = min(bucket["l"], b["l"])
@@ -183,6 +207,7 @@ def aggregate(bars, minutes):
             bucket["v"] += b["v"]
             bucket["cv"] += b.get("cv", 0.0)
             bucket["pv"] += b.get("pv", 0.0)
+            bucket["sv"] += b.get("sv", 0.0)
     if bucket:
         out.append(bucket)
     return out

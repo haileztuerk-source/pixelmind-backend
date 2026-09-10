@@ -394,7 +394,7 @@ canvas{display:block;width:100%;height:100%}
 
 const S = {
   market:"NQ", tf:"15m", data:null, plan:null, messages:[], overview:[],
-  view:0, profileMode:"heat", layers:{va:true, gpbox:true, gcurve:false, orbs:true, fix:true, live:true, zonen:true, profil:true, session:true},
+  view:0, profileMode:"heat", layers:{tpo:false, va:true, gpbox:true, gcurve:false, orbs:true, fix:true, live:true, zonen:true, profil:true, session:true},
   fitAll:false, immersive:false, lastMsgCount:0, busy:false, cross:null, trails:null,
 };
 const TFS = ["1m","5m","15m","30m","1h","1d"];
@@ -608,6 +608,97 @@ function tToX(ts, bars, bw){
     (Call-lastig) ein, statt einheitlich grau zu bleiben.
 
     Dazu markiert: Value Area, POC, Volumenknoten und Vakuum-Zonen. */
+/** TPO als Blockreihen - eine Zelle je Periode, in der der Preis
+    beruehrt wurde. Bewusst anders gezeichnet als das Volumenprofil:
+    das eine ist eine Flaeche (wie viel), das andere sind zaehlbare
+    Bloecke (wie oft). Wer beide sieht, soll sie nicht verwechseln.
+
+    Das TPO bekommt eine eigene abgedunkelte Spalte statt frei ueber den
+    Kerzen zu liegen. Ohne sie standen elf deckende Bloecke je Reihe vor
+    dem Chart und die Kerzen der ersten Handelsstunde waren nicht mehr
+    lesbar - zwei Ebenen, die sich gegenseitig ausloeschen. Mit eigener
+    Spalte bleibt es das, was es sein soll: ein Streifen neben dem
+    Chart, den man abzaehlen kann. */
+function drawTPO(ctx, y, pw, ph, topPad, V){
+  const tp = S.data?.tpo;
+  if(!tp || !(tp.bins||[]).length) return;
+  const x0 = (S.layers.profil ? Math.min(pw*0.19, 74) + 5 : 2) + 4;
+  const cell = 3.0, gap = 1.0;
+  const maxCells = Math.max(1, Math.floor(Math.min(52, pw*0.14) / (cell+gap)));
+  const colW = maxCells*(cell+gap) + 8;
+  const rowH = Math.max(1.2, ph / (tp.bins_n || 180));
+
+  // Eigene Spalte: ein dunkler Grund, damit die Bloecke gegen ihn
+  // zaehlbar sind und nicht gegen die Kerzen dahinter.
+  // Die Spalte reicht nur so weit wie die Sitzung, die sie beschreibt -
+  // nicht ueber die ganze Charthoehe. Ueber die volle Hoehe gezogen lief
+  // sie als heller Balken durch den leeren Bereich unterhalb der Kerzen
+  // und sah aus wie ein Zeichenfehler.
+  const cTop = Math.max(topPad, y(tp.hi)), cBot = Math.min(topPad+ph, y(tp.lo));
+  if(cBot - cTop < 8) return;
+  ctx.save();
+  // Nicht ganz deckend: die Kerzen dahinter bleiben schemenhaft
+  // sichtbar. Deckend war die Spalte ein Loch im Chart, durchsichtig
+  // waren die Bloecke nicht mehr abzaehlbar - das hier ist die Mitte.
+  const bgGrad = ctx.createLinearGradient(x0-4, 0, x0-4+colW, 0);
+  bgGrad.addColorStop(0, V("--ground")); bgGrad.addColorStop(1, V("--panel"));
+  ctx.fillStyle = bgGrad; ctx.globalAlpha = .62;
+  ctx.fillRect(x0-4, cTop, colW, cBot-cTop);
+  ctx.globalAlpha = .5; ctx.strokeStyle = V("--panel-3"); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(snap(x0-4+colW), cTop);
+  ctx.lineTo(snap(x0-4+colW), cBot); ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // Initial Balance: die Spanne der ersten beiden Perioden. Der Bereich,
+  // gegen den der Rest des Tages gemessen wird.
+  if(tp.ib_low && tp.ib_high){
+    const y1=Math.min(y(tp.ib_high), y(tp.ib_low)), y2=Math.max(y(tp.ib_high), y(tp.ib_low));
+    ctx.fillStyle=V("--struct"); ctx.globalAlpha=.14;
+    ctx.fillRect(x0-4, y1, colW, Math.max(1,y2-y1));
+    ctx.globalAlpha=.55; ctx.strokeStyle=V("--struct"); ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x0-3, y1); ctx.lineTo(x0-3, y2); ctx.stroke();
+    ctx.globalAlpha=1;
+  }
+
+  tp.bins.forEach(b=>{
+    if(!b.n) return;
+    const yy = y(b.p);
+    if(yy < topPad-1 || yy > topPad+ph+1) return;
+    const n = Math.min(maxCells, b.n);
+    ctx.fillStyle = b.va ? V("--pivot") : V("--struct");
+    ctx.globalAlpha = b.va ? .8 : .5;
+    for(let i=0;i<n;i++)
+      ctx.fillRect(x0 + i*(cell+gap), snap(yy - rowH/2), cell, Math.max(1, rowH));
+  });
+  ctx.globalAlpha=1;
+
+  // Single Prints: Preise, die nur eine einzige Periode gesehen haben -
+  // dort ist der Markt ohne Gegenwehr durchgelaufen.
+  (tp.singles||[]).forEach(p=>{
+    const yy=snap(y(p))+half();
+    if(yy < topPad || yy > topPad+ph) return;
+    ctx.strokeStyle=V("--resist"); ctx.globalAlpha=.55; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x0-4,yy); ctx.lineTo(x0-1,yy); ctx.stroke();
+  });
+  ctx.globalAlpha=1;
+
+  if(tp.poc){
+    const yy=snap(y(tp.poc))+half();
+    ctx.strokeStyle=V("--pivot"); ctx.globalAlpha=.85; ctx.lineWidth=1.2;
+    ctx.setLineDash([2,3]);
+    ctx.beginPath(); ctx.moveTo(x0-4,yy); ctx.lineTo(x0-4+colW,yy); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha=1;
+  }
+
+  // Beschriftung der Spalte, damit sie nicht fuer ein zweites
+  // Volumenprofil gehalten wird.
+  ctx.font="7px "+V("--mono"); ctx.fillStyle=V("--struct");
+  ctx.textAlign="left"; ctx.globalAlpha=.8;
+  ctx.fillText("TPO "+tp.brackets+"\u00d7"+tp.bracket_min+"m", x0+2, cBot-3);
+  ctx.globalAlpha=1;
+  ctx.restore();
+}
+
 /** Farbverlauf des Profils nach Volumenstaerke - blau, gruen, gelb, rot.
     Uebernommen aus der Desktop-Vorlage: die Farbe verstaerkt dort die
     Balkenlaenge, statt eine zweite Groesse zu kodieren. Der Blick findet
@@ -830,6 +921,7 @@ function draw(){
   const y=p=>topPad+(hi-p)/(hi-lo)*ph, bw=pw/bars.length;
 
   if(S.layers.profil && S.data.vp?.bins) drawProfile(ctx, y, pw, ph, topPad, V);
+  if(S.layers.tpo) drawTPO(ctx, y, pw, ph, topPad, V);
   if(S.layers.zonen) (S.data.zones||[]).forEach(z=>{
     const y1=y(z.top),y2=y(z.bot);
     const c = z.role==="resist"?"224,169,60" : z.role==="support"?"169,123,232" : "207,198,178";
@@ -1075,8 +1167,9 @@ function render(){
   $("meta").innerHTML =
     `${d.bar_source?.source==="cboe"?"Cboe":"Yahoo"}${stale?" · STALE":""} · ATR ${fmt(d.atr)} · `+
     `${d.bars.length} Kerzen${S.layers.profil && d.vp?.basis
-      ? " · "+({cme:"CME-Volumen", options:"Optionsfluss", time:"TPO"}[d.vp.basis] || d.vp.basis)
+      ? " · "+({cme:"CME-Volumen", etf:"Stückvolumen", options:"Optionsfluss", time:"Zeit je Preis"}[d.vp.basis] || d.vp.basis)
         + (d.vp.source ? " ("+esc(d.vp.source)+")" : "")
+        + (S.layers.tpo && d.tpo?.brackets ? " + TPO "+d.tpo.brackets+"×"+d.tpo.bracket_min+"min" : "")
       : ""}${S.trails?.tracks?.length && S.layers.orbs
       ? " · "+S.trails.tracks.length+" Spuren" : ""} · ${hhmm(d.ts)}`;
   renderTf(); renderStrip(); renderLevel(); renderGamma(); draw();
@@ -1389,14 +1482,15 @@ $("idbtn").onclick=()=>{
 };
 
 function layerSheet(){
-  const items=[["va","Value Area","wo 70 % des Volumens liefen"],
+  const items=[["tpo","TPO-Profil","wo der Markt WIE LANGE war"],
+               ["va","Value Area","wo 70 % des Volumens liefen"],
                ["gpbox","GP-Beschriftung","Kasten am Level statt nur an der Skala"],
                ["gcurve","Gamma-Kurve","nur beim Herauszoomen aussagekräftig"],
                ["orbs","Wand-Verlauf","Orb-Ketten aus allen Optionsketten"],
                ["fix","Fixe Level","aus dem Zonenbuch"],
                ["live","Geisterlinien","wohin die Wand seither wanderte"],
                ["zonen","Konfluenz-Zonen","getönte Bänder"],
-               ["profil","Preisprofil","CME-Volumen je Preis, sonst Optionsfluss"],
+               ["profil","Volumenprofil","wo WIEVIEL gehandelt wurde"],
                ["session","Struktur-Marken","POC, Vortageshoch und -tief"]];
   openSheet(`<div class="sh-t">Struktur im Chart</div>`+items.map(([k,l,s])=>`
     <div class="si ${S.layers[k]?"on":""}" data-l="${k}"><span class="box"></span>${l}
@@ -1406,6 +1500,12 @@ function layerSheet(){
       ["side","Optionsseite","Türkis = Put-lastig, Gold = Call-lastig"]]
       .map(([k,l,sub])=>`<div class="si ${S.profileMode===k?"sel":""}" data-pm="${k}">${l}
         <span class="sub">${sub}</span></div>`).join("")
+    +`<div class="sh-n">Volumenprofil und TPO sind zwei verschiedene Fragen, nicht zwei
+      Darstellungen derselben. Das Volumenprofil misst gehandeltes Volumen je Preis
+      (CME-Kontrakte aus dem Future, sonst das Stückvolumen des ETF). Das TPO zählt,
+      in wie vielen 30-Minuten-Perioden ein Preis überhaupt berührt wurde — ohne
+      Volumen. Beide laufen gleichzeitig und dürfen sich widersprechen: genau dieser
+      Widerspruch ist die Aussage.</div>`
     +`<div class="sh-n">Rollenfarben statt Quellfarben: Gold ist Widerstand, Türkis ist Support,
       Beige ist Pivot. Woher ein Level stammt, steht im Text — nie in der Farbe.</div>`);
   $("sheetBody").querySelectorAll("[data-pm]").forEach(el=>el.onclick=()=>{

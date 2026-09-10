@@ -338,42 +338,183 @@ def bars(market_key, interval="15m"):
                    "stale": True, "thin": True}
 
 
+ETFS = {"NQ": "QQQ", "ES": "SPY", "YM": "DIA", "RTY": "IWM", "GC": "GLD"}
+
+
 def profile_bars(market_key, interval=None, index_spot=None):
-    """Kerzen fuer das Volumenprofil - aus dem Future, nicht aus dem Index.
+    """Kerzen mit echtem gehandeltem Volumen, in den Index-Preisraum gehoben.
 
-    Der Index selbst wird nicht gehandelt und hat kein Volumen. Fuer ein
-    Volumenprofil braucht es das gehandelte Volumen, und das liegt im
-    Future: NQ=F traegt bei Yahoo das CME-Handelsvolumen je Kerze.
+    Der Index selbst wird nicht gehandelt und hat kein Volumen. Ein
+    Volumenprofil braucht aber gehandeltes Volumen, sonst zaehlt es nur
+    Zeit je Preis und ist ein TPO unter falschem Namen.
 
-    Gemessen ist der Unterschied deutlich - beim Future betraegt das
-    Verhaeltnis von Spitze zu Mittel rund das Zehnfache, beim
-    Optionsvolumen der Kette nur das Fuenffache. Bei flachem Gewicht
-    bleibt von "Volumen je Preis" faktisch "Zeit je Preis" uebrig, also
-    ein TPO-Profil unter falschem Namen.
+    Es gibt zwei Quellen dafuer, und beide sind echtes Tapevolumen:
 
-    Die Future-Preise werden ueber ein einziges Verhaeltnis in den
-    Index-Preisraum gehoben, damit Profil, Kerzen und Strikes weiter auf
+    1. Der Future (NQ=F) bei Yahoo - das CME-Kontraktvolumen. Die erste
+       Wahl, weil der Future rund um die Uhr laeuft und die Nacht
+       mitnimmt.
+    2. Der ETF (QQQ) beim Cboe-CDN - Feld `stock_volume`, das echte
+       Stueckvolumen der Minute an den Aktienboersen. Rund 350.000
+       Stueck in der Eroeffnungsminute, minuetlich aufgeloest.
+
+    Der zweite Weg ist kein Notbehelf, sondern nur ein anderer
+    Handelsplatz desselben Basiswerts - und er ist der belastbarere
+    Zugang: Yahoo drosselt Serverabfragen mit HTTP 429, das Cboe-CDN
+    nicht. Faellt der Future aus, aendert sich also die Boerse, nicht die
+    Art der Groesse.
+
+    Beide Preisreihen werden ueber ein einziges gemessenes Verhaeltnis in
+    den Index-Preisraum gehoben, damit Profil, Kerzen und Strikes auf
     derselben Achse liegen.
     """
-    conf = MARKETS.get(market_key) or MARKETS[DEFAULT_MARKET]
-    sym = conf["chart"]
+    key = market_key if market_key in MARKETS else DEFAULT_MARKET
+    conf = MARKETS[key]
+
+    def mapped(bars, ref, sym, kind):
+        """Hebt eine Kursreihe ueber ein Verhaeltnis in den Index-Preisraum.
+
+        Das Verhaeltnis wird nicht gegen feste Baender geprueft. Ein
+        erster Versuch tat das - und liess nur NQ durch: NDX zu QQQ ist
+        rund 41, SPX zu SPY aber rund 10, DJX zu DIA rund 1. Die Baender
+        beschrieben also nicht "plausibel", sondern "Nasdaq", und ES und
+        RTY fielen still auf das Optionsvolumen zurueck.
+
+        Geprueft wird stattdessen, was wirklich schiefgehen kann: ein
+        fehlender oder eingefrorener Kurs. Beide Preise muessen positiv
+        sein, und die Tagesspanne der Reihe muss die eines Handelstages
+        sein - nicht null (eingefroren) und nicht ein Vielfaches
+        (falsches Symbol).
+        """
+        if not (index_spot and ref) or index_spot <= 0 or ref <= 0:
+            return [], 1.0, None, None
+        span = (max(b["h"] for b in bars) - min(b["l"] for b in bars)) / ref
+        if not (0.0002 < span < 0.25):
+            return [], 1.0, None, None
+        ratio = index_spot / ref
+        out = [{
+            "t": b["t"], "v": b["v"], "cv": b.get("cv", 0.0), "pv": b.get("pv", 0.0),
+            "o": b["o"] * ratio, "h": b["h"] * ratio,
+            "l": b["l"] * ratio, "c": b["c"] * ratio,
+        } for b in bars]
+        return out, ratio, sym, kind
+
     # Immer Minutenkerzen, unabhaengig von der angezeigten Zeitebene.
     # Gemessen an derselben Sitzung: mittlere Kerzenspanne 6,7 statt
     # 22,1 Punkte, und die Value Area schrumpft von 97 auf 42 Punkte.
     # Aus 5-Minuten-Kerzen war sie mehr als doppelt so breit, wie sie
     # ist - reine Verschmierung innerhalb der Kerze.
+    sym = conf["chart"]
     fut, meta = candles(sym, "1m", ttl=45)
-    if not fut or not any((b.get("v") or 0) > 0 for b in fut):
-        return [], 1.0, None
+    if fut and any((b.get("v") or 0) > 0 for b in fut):
+        ref = meta.get("regularMarketPrice") or fut[-1]["c"]
+        return mapped(fut, ref, sym, "cme")
 
-    fut_spot = meta.get("regularMarketPrice") or fut[-1]["c"]
-    ratio = (index_spot / fut_spot) if (index_spot and fut_spot) else 1.0
-    if not (0.8 < ratio < 1.25):
-        ratio = 1.0        # unplausibel - lieber ungewandelt als verzerrt
+    # Der ETF: Stueckvolumen statt Kontraktvolumen, gleiche Aussage.
+    from . import cboe
+    etf = ETFS.get(key)
+    if etf:
+        raw, _stale = cboe.intraday(etf)
+        raw = [b for b in raw if (b.get("sv") or 0) > 0]
+        if raw:
+            # Breite des Bandes aus dem gehandelten Stueckvolumen, die
+            # Faerbung weiter aus dem Call-Put-Verhaeltnis der Optionen.
+            # Die Faerbung ist je Band ein Anteil, kein Absolutwert -
+            # die beiden Groessen muessen daher nicht dieselbe Einheit
+            # haben, und keine wird in die andere umgedeutet.
+            bars = [dict(b, v=b["sv"]) for b in raw]
+            return mapped(bars, bars[-1]["c"], etf, "etf")
 
-    mapped = [{
-        "t": b["t"], "v": b["v"],
-        "o": b["o"] * ratio, "h": b["h"] * ratio,
-        "l": b["l"] * ratio, "c": b["c"] * ratio,
-    } for b in fut]
-    return mapped, ratio, sym
+    return [], 1.0, None, None
+
+
+def tpo_profile(bars, bins=180, bracket_min=30):
+    """Market Profile: zaehlt Zeit je Preis, nicht Volumen.
+
+    Das ist die eigentliche TPO-Rechnung und etwas anderes als ein
+    Volumenprofil. Die Sitzung wird in Perioden geteilt (klassisch 30
+    Minuten). Fuer jede Periode wird vermerkt, WELCHE Preise beruehrt
+    wurden - jeder Preis genau einmal je Periode, unabhaengig davon, wie
+    oft oder mit wie viel Volumen er gehandelt wurde.
+
+    Ein Preis, an dem der Markt in acht Perioden war, traegt also acht
+    TPOs; ein Preis, durch den er in einer Periode nur durchgerauscht
+    ist, genau einen. Daraus folgt der Kern der Aussage: das Profil misst
+    Akzeptanz ueber die Zeit, nicht Umsatz.
+
+    Single Prints - Preise mit genau einer Periode - sind die Stellen, an
+    denen der Markt ohne Gegenwehr durchgelaufen ist.
+    """
+    if not bars:
+        return {}
+    lo = min(b["l"] for b in bars)
+    hi = max(b["h"] for b in bars)
+    if hi <= lo:
+        return {}
+    step = (hi - lo) / bins
+    width = bracket_min * 60
+
+    # Je Periode die Menge der beruehrten Bins - eine Menge, kein Zaehler:
+    # mehrfaches Beruehren innerhalb derselben Periode zaehlt einmal.
+    brackets = {}
+    for b in bars:
+        key = int(b["t"] // width)
+        touched = brackets.setdefault(key, set())
+        i0 = max(0, min(bins - 1, int((b["l"] - lo) / step)))
+        i1 = max(0, min(bins - 1, int((b["h"] - lo) / step)))
+        touched.update(range(i0, i1 + 1))
+
+    order = sorted(brackets.keys())
+    counts = [0] * bins
+    per_bin = [[] for _ in range(bins)]
+    for pos, key in enumerate(order):
+        for i in brackets[key]:
+            counts[i] += 1
+            per_bin[i].append(pos)
+
+    total = sum(counts)
+    if total <= 0:
+        return {}
+
+    poc_i = max(range(bins), key=lambda i: counts[i])
+    lo_i = hi_i = poc_i
+    acc = counts[poc_i]
+    while acc < total * 0.7 and (lo_i > 0 or hi_i < bins - 1):
+        down = counts[lo_i - 1] if lo_i > 0 else -1
+        up = counts[hi_i + 1] if hi_i < bins - 1 else -1
+        if up >= down:
+            hi_i += 1
+            acc += counts[hi_i]
+        else:
+            lo_i -= 1
+            acc += counts[lo_i]
+
+    price = lambda i: lo + (i + 0.5) * step
+    peak = max(counts) or 1
+
+    # Initial Balance: die Spanne der ersten beiden Perioden
+    ib_lo = ib_hi = None
+    if len(order) >= 1:
+        first = set()
+        for key in order[:2]:
+            first |= brackets[key]
+        if first:
+            ib_lo, ib_hi = price(min(first)), price(max(first))
+
+    return {
+        "basis": "tpo",
+        "poc": price(poc_i),
+        "vah": price(hi_i),
+        "val": price(lo_i),
+        "lo": lo, "hi": hi, "step": step, "bins_n": bins,
+        "brackets": len(order),
+        "bracket_min": bracket_min,
+        "peak": peak,
+        "ib_low": ib_lo, "ib_high": ib_hi,
+        "singles": [price(i) for i in range(bins) if counts[i] == 1][:12],
+        "bins": [{
+            "p": price(i),
+            "n": counts[i],
+            "w": counts[i] / peak,
+            "va": lo_i <= i <= hi_i,
+        } for i in range(bins) if counts[i] > 0],
+    }
