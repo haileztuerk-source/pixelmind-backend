@@ -923,16 +923,32 @@ function drawOrbs(ctx, bars, y, bw, pw, ph, V, topPad){
   const bucket = (tr && tr.bucket) || 120;
   const t0 = bars[0].t, t1 = bars[bars.length-1].t;
 
-  // Aufgezeichnete Staerke je Spur und Zeitfenster nachschlagbar machen
+  // Staerke einer Wand als NOMINAL, nicht als Kontraktzahl.
+  //
+  // Die Helligkeit vergleicht Waende ueber Ketten hinweg, und Kontrakte
+  // sind nicht ueberall gleich gross: ein NDX-Kontrakt laeuft auf 100
+  // Indexpunkte, ein QQQ-Kontrakt auf 100 Anteile - das 41-fache je
+  // Stueck. Gegen ein gemeinsames Maximum aus Kontraktzahlen gerechnet
+  // erschien die staerkste NDX-Wand mit 3.511 Kontrakten neben QQQ mit
+  // 235.246 bei 1,5 Prozent Helligkeit, also gar nicht. Sie war da, nur
+  // unsichtbar.
+  //
+  // In Nominal sind es 10,6 gegen 20,1 Mrd - also Faktor 1,9 statt 78.
+  // Und das ist auch die richtige Groesse: eine Wand wirkt, weil der
+  // Dealer dagegen absichern muss, und wieviel er kaufen oder verkaufen
+  // muss, haengt am Geld, nicht an der Zahl der Tickets.
+  const nom = (oi, strike) => oi * 100 * (strike || 1);
+
   const rec = new Map();
   let peak = 0;
   tracks.forEach(tk=>{
     tk.points.forEach(q=>{
       rec.set(`${tk.chain}|${tk.side}|${tk.strike}|${q.t}`, q.oi);
-      if(q.oi > peak) peak = q.oi;
+      const n = nom(q.oi, tk.strike);
+      if(n > peak) peak = n;
     });
   });
-  walls.forEach(w=>{ if(w.oi > peak) peak = w.oi; });
+  walls.forEach(w=>{ const n = nom(w.oi, w.strike); if(n > peak) peak = n; });
   if(peak <= 0) return;
 
   // Schrittweite: nie enger als vier Bildpunkte, sonst zeichnen sich die
@@ -955,7 +971,7 @@ function drawOrbs(ctx, bars, y, bw, pw, ph, V, topPad){
       const slot = t - (t % bucket);
       const measured = rec.get(`${key}|${slot}`);
       const oi = measured != null ? measured : w.oi;
-      const rel = Math.min(1, oi / peak);
+      const rel = Math.min(1, nom(oi, w.strike) / peak);
       const r = Math.round((1.1 + 3.4 * Math.sqrt(rel)) * 2) / 2;
       const sp = orbSprite(col, r);
       // Nicht gemessene Abschnitte deutlich zurueckgenommen: das Band

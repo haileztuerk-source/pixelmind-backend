@@ -247,9 +247,24 @@ def build_snapshot(key, interval="15m"):
         snap["chain_stale"] = True
 
     # Leading Walls ueber alle Ketten des Marktes - Index und ETF.
-    # Die ETF-Kette traegt bei NDX rund das Hundertfache an Open
-    # Interest; sie wegzulassen hiesse, die eigentliche Positionierung
-    # nicht zu sehen.
+    #
+    # Hier stand, die ETF-Kette trage bei NDX rund das Hundertfache an
+    # Open Interest. In Kontrakten stimmt das ungefaehr - gemessen 78-fach
+    # am staerksten Strike -, aber Kontrakte sind nicht vergleichbar: ein
+    # NDX-Kontrakt laeuft auf 100 Indexpunkte, ein QQQ-Kontrakt auf 100
+    # Anteile, also das 41-fache je Stueck.
+    #
+    # Wirtschaftlich gemessen, im Band von zwei Prozent um den Kurs:
+    #   Nasdaq   Index 86 Mrd   ETF  96 Mrd   -> ETF 1,1-fach
+    #   S&P 500  Index 1937 Mrd ETF 158 Mrd   -> ETF 0,08-fach
+    #   Russell  Index 42 Mrd   ETF  39 Mrd   -> ETF 0,94-fach
+    #   Dow      Index 0,1 Mrd  ETF 2,9 Mrd   -> ETF 24-fach
+    #
+    # Beide Ketten zu lesen bleibt also richtig, aber aus einem anderen
+    # Grund als angenommen: nicht weil eine die andere erdrueckt, sondern
+    # weil je nach Markt mal die eine, mal die andere die Positionierung
+    # traegt. Beim S&P steckt 92 Prozent des Nominals im Index selbst,
+    # beim Dow ist der Index praktisch leer.
     lw = walls.leading(key)
     snap["leading_walls"] = lw["walls"]
     snap["chain_ratios"] = lw["ratios"]
