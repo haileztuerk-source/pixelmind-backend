@@ -52,7 +52,44 @@ class WallTrail:
         if market not in self._cache:
             self._cache[market] = self._store(market).load({"tracks": {}}) or {"tracks": {}}
             self._cache[market].setdefault("tracks", {})
+            self._cache[market].setdefault("paths", {})
         return self._cache[market]
+
+    def record_paths(self, market, levels, ts=None):
+        """Zeichnet den WEG wandernder Marken auf - Zero-Gamma, Max Pain.
+
+        Waende und diese Marken sind verschiedene Dinge, und deshalb
+        werden sie verschieden gespeichert. Eine Wand sitzt auf einem
+        Strike und bleibt dort; was sich an ihr aendert, ist ihre
+        Staerke. Das Zero-Gamma sitzt auf keinem Strike - es ist die
+        Nullstelle einer Kurve und wandert mit der impliziten Vola.
+        Es als Spur unter einem festen Strike abzulegen ginge nicht: es
+        haette in jedem Zeitfenster einen anderen.
+
+        Und es ist die Bewegung, die zaehlt. Dass das Zero-Gamma 58
+        Punkte entfernt steht, ist eine Zahl; dass es dem Kurs seit einer
+        Stunde entgegenkommt, ist eine Aussage. Ohne den Weg sieht man
+        nur den Punkt.
+        """
+        if not levels:
+            return
+        with self.lock:
+            st = self._state(market)
+            b = _bucket(ts)
+            cutoff = (ts or time.time()) - KEEP_HOURS * 3600
+            changed = False
+            for name, price in levels.items():
+                if price is None:
+                    continue
+                pts = st["paths"].setdefault(name, [])
+                if pts and pts[-1]["t"] == b:
+                    pts[-1]["p"] = round(float(price), 2)
+                else:
+                    pts.append({"t": b, "p": round(float(price), 2)})
+                    changed = True
+                st["paths"][name] = [q for q in pts if q["t"] >= cutoff]
+            if changed:
+                self._store(market).save(st)
 
     # ------------------------------------------------------------ schreiben
     def record(self, market, walls, spot=None, ts=None):
@@ -144,7 +181,8 @@ class WallTrail:
                     "span": tr["points"][-1]["t"] - tr["points"][0]["t"],
                 })
             out.sort(key=lambda t: t["now"]["oi"], reverse=True)
-            return {"tracks": out, "peak_oi": peak, "bucket": BUCKET}
+            return {"tracks": out, "peak_oi": peak, "bucket": BUCKET,
+                    "paths": {k: list(v) for k, v in (st.get("paths") or {}).items() if v}}
 
 
 TRAIL = WallTrail()

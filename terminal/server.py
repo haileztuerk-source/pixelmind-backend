@@ -270,7 +270,17 @@ def build_snapshot(key, interval="15m"):
     snap["chain_ratios"] = lw["ratios"]
     snap["wall_confluence"] = walls.confluence(lw["walls"], max(atr_v * 0.28, 1))
     # Mit der Uhr des Charts stempeln, damit Orbs und Kerzen zusammenpassen.
-    TRAIL.record(key, lw["walls"], spot, ts=(bars[-1]["t"] if bars else None))
+    _ts = bars[-1]["t"] if bars else None
+    TRAIL.record(key, lw["walls"], spot, ts=_ts)
+    # Wandernde Marken getrennt aufzeichnen. Sie sitzen auf keinem Strike -
+    # das Zero-Gamma ist die Nullstelle einer Kurve und wandert mit der
+    # impliziten Vola -, und es ist die Bewegung, die zaehlt: dass es 58
+    # Punkte entfernt steht, ist eine Zahl; dass es dem Kurs seit einer
+    # Stunde entgegenkommt, ist eine Aussage.
+    TRAIL.record_paths(key, {
+        "flip": snap.get("flip"),
+        "max_pain": snap.get("max_pain"),
+    }, ts=_ts)
 
     # Zonenbuch zuletzt: es friert die Gamma-Felder ein, die erst oben
     # gesetzt wurden. Erst dadurch sind die Waende ueber den Tag hinweg

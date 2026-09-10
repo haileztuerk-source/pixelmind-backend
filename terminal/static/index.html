@@ -923,6 +923,57 @@ function orbSprite(color, r){
 /** Wand-Verlauf als Orb-Ketten: x = Zeit, y = Preis, Radius = Bestand.
     Eine Linie sagt, wo die Wand liegt. Die Kette sagt zusaetzlich, ob
     sie waechst oder zerfaellt. */
+/** Der WEG wandernder Marken - Zero-Gamma, Max Pain.
+
+    Bewusst eine Linie und keine Perlenkette. Die Kette taugt fuer eine
+    Wand, weil die auf ihrem Strike sitzt und sich nur ihre Staerke
+    aendert - jede Perle steht dann fuer denselben Preis. Das Zero-Gamma
+    sitzt auf keinem Strike: es ist die Nullstelle einer Kurve und
+    wandert mit der impliziten Vola. Eine Kette von Perlen auf
+    wechselnder Hoehe waere kein Band mehr, sondern Streusel.
+
+    Und es ist die Bewegung, die zaehlt. Dass das Zero-Gamma 58 Punkte
+    entfernt steht, ist eine Zahl; dass es dem Kurs seit einer Stunde
+    entgegenkommt, ist eine Aussage. */
+function drawPaths(ctx, bars, y, bw, pw, ph, V, topPad){
+  const paths = S.trails?.paths;
+  if(!paths || !bars.length) return;
+  const t0 = bars[0].t, t1 = bars[bars.length-1].t;
+  // Auf die Zeichenflaeche beschneiden. Ein wandernder Weg verlaesst sie
+  // haeufiger als eine waagerechte Wand - ohne Beschnitt lief er ueber
+  // die Zeitachse und die Werkzeugleiste hinaus.
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, topPad, pw, ph); ctx.clip();
+  const stil = {
+    flip:     {c:"--pivot",  w:1.3, dash:[3,3], lab:"Zero-Gamma"},
+    max_pain: {c:"--struct", w:1.0, dash:[1,4], lab:"Max Pain"},
+  };
+  Object.entries(paths).forEach(([name, pts])=>{
+    const st = stil[name]; if(!st || pts.length < 2) return;
+    const seg = pts.filter(q=>q.t >= t0 - 120 && q.t <= t1 + 120);
+    if(seg.length < 2) return;
+    ctx.strokeStyle = V(st.c); ctx.lineWidth = st.w;
+    ctx.setLineDash(st.dash); ctx.globalAlpha = .62;
+    ctx.beginPath();
+    let auf = false;
+    seg.forEach(q=>{
+      const x = tToX(q.t, bars, bw), yy = y(q.p);
+      if(yy < topPad-40 || yy > topPad+ph+40){ auf = false; return; }
+      if(!auf){ ctx.moveTo(x, yy); auf = true; } else ctx.lineTo(x, yy);
+    });
+    ctx.stroke(); ctx.setLineDash([]);
+    // Der letzte Punkt bekommt einen Kopf, damit das Ende der Spur
+    // ablesbar ist und nicht im Nichts ausfranst.
+    const last = seg[seg.length-1], ly = y(last.p);
+    if(ly >= topPad-2 && ly <= topPad+ph+2){
+      ctx.globalAlpha = .9; ctx.fillStyle = V(st.c);
+      ctx.beginPath(); ctx.arc(tToX(last.t, bars, bw), ly, 2.1, 0, 6.2832); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  });
+  ctx.restore();
+}
+
 function drawOrbs(ctx, bars, y, bw, pw, ph, V, topPad){
   const walls = S.data?.leading_walls || [];
   const tr = S.trails;
@@ -1136,6 +1187,7 @@ function draw(){
 
   if(S.layers.profil && S.data.vp?.w) drawProfile(ctx, y, pw, ph, topPad, V, lo, hi);
   if(S.layers.tpo) drawTPO(ctx, y, pw, ph, topPad, V);
+  if(S.layers.orbs) drawPaths(ctx, bars, y, bw, pw, ph, V, topPad);
   if(S.layers.zonen) (S.data.zones||[]).forEach(z=>{
     const y1=y(z.top),y2=y(z.bot);
     const c = z.role==="resist"?"224,169,60" : z.role==="support"?"169,123,232" : "207,198,178";
