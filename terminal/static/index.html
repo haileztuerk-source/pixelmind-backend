@@ -665,8 +665,14 @@ function drawTPO(ctx, y, pw, ph, topPad, V){
     const yy = y(b.p);
     if(yy < topPad-1 || yy > topPad+ph+1) return;
     const n = Math.min(maxCells, b.n);
-    ctx.fillStyle = b.va ? V("--pivot") : V("--struct");
-    ctx.globalAlpha = b.va ? .8 : .5;
+    // Farbe nach Anzahl der Perioden - blau fuer die Preise, durch die
+    // der Markt nur streifte, rot fuer die, an denen er den halben Tag
+    // stand. Beim TPO traegt die Farbe echte zusaetzliche Information:
+    // die Blockzahl je Zeile ist auf die Spaltenbreite gedeckelt, die
+    // Farbe ist es nicht.
+    const c = heat(b.w);
+    ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
+    ctx.globalAlpha = b.va ? .92 : .62;
     for(let i=0;i<n;i++)
       ctx.fillRect(x0 + i*(cell+gap), snap(yy - rowH/2), cell, Math.max(1, rowH));
   });
@@ -721,6 +727,7 @@ function drawProfile(ctx, y, pw, ph, topPad, V, loP, hiP){
   // von 1,1 Pixel eine Gesamthoehe von 1100 Pixeln auf 600 verfuegbaren.
   const rowH = ph / (vp.bins_n || 1000);
   const gold = [224,169,60], violet = [169,123,232], flat = [91,106,125];
+  const cream = [207,198,178], slate = [91,106,125];
 
   // Value Area ueber die ganze Chartbreite, nicht nur hinter dem Profil.
   // Sie ist eine Aussage ueber den Kursbereich, nicht ueber den Streifen:
@@ -775,8 +782,17 @@ function drawProfile(ctx, y, pw, ph, topPad, V, loP, hiP){
     const inVA = i >= va0 && i <= va1;
     let rgb, alpha;
     if(S.profileMode === "heat"){
-      rgb = heat(w/1000);                    // Farbe = Volumenstaerke
-      alpha = inVA ? 0.92 : 0.55;
+      // Value Area in Creme bis Weiss, ausserhalb gedaempftes
+      // Schiefergrau. Die Staerke steckt schon in der Balkenlaenge -
+      // die Farbe muss sie nicht ein zweites Mal erzaehlen und traegt
+      // stattdessen die Frage, die man beim Blick auf ein
+      // Volumenprofil zuerst stellt: liegt dieser Preis drinnen oder
+      // draussen. Die Helligkeit staffelt innerhalb beider Bereiche
+      // noch nach Gewicht, damit die Struktur nicht flach wird.
+      const t = w/1000;
+      rgb = inVA ? cream.map((c,j)=> Math.round(c + (255-c)*t*0.55))
+                 : slate;
+      alpha = inVA ? 0.58 + 0.40*t : 0.26 + 0.30*t;
     } else {
       // Rollenfarben: Faerbung nach gehandelter Optionsseite.
       // Die Empfindlichkeit ist auf 25 Prozentpunkte um die Mitte
@@ -1117,11 +1133,15 @@ function draw(){
   // die Achse ueber zwei Jahre und zeigte "10.09. · 12.03. · 10.09." -
   // zwei verschiedene Septembertage, nicht zu unterscheiden.
   const yOpt = {month:"2-digit", year:"2-digit"};
+  // Die Schwelle zum reinen Datum liegt bei zehn Tagen, nicht bei
+  // fuenf: bei knapp ueber fuenf Tagen fielen zwei der fuenf Marken auf
+  // denselben Kalendertag und die Achse las sich "08.09. · 08.09.".
+  // Solange die Uhrzeit die Marken noch trennt, gehoert sie dazu.
   for(let i=0;i<bars.length;i+=st){
     const d=new Date(bars[i].t*1000);
     const lab = spanD > 300
       ? d.toLocaleDateString("de-DE", yOpt)
-      : (S.tf==="1d" || spanD > 5)
+      : (S.tf==="1d" || spanD > 10)
       ? d.toLocaleDateString("de-DE", dOpt)
       : spanD > 1.2
         ? d.toLocaleDateString("de-DE", dOpt)+" "
@@ -1545,8 +1565,8 @@ function layerSheet(){
     <div class="si ${S.layers[k]?"on":""}" data-l="${k}"><span class="box"></span>${l}
       <span class="sub">${s}</span></div>`).join("")
     +`<div class="sh-t" style="padding-top:14px">Volumenprofil</div>`
-    +[["heat","Heatmap","Farbe = Volumenstärke, wie im Desktop"],
-      ["side","Optionsseite","Türkis = Put-lastig, Gold = Call-lastig"]]
+    +[["heat","Innen / Außen","Weiß in der Value Area, Grau außerhalb"],
+      ["side","Optionsseite","Violett = Put-lastig, Gold = Call-lastig"]]
       .map(([k,l,sub])=>`<div class="si ${S.profileMode===k?"sel":""}" data-pm="${k}">${l}
         <span class="sub">${sub}</span></div>`).join("")
     +`<div class="sh-n">Volumenprofil und TPO sind zwei verschiedene Fragen, nicht zwei
@@ -1555,7 +1575,12 @@ function layerSheet(){
       in wie vielen 30-Minuten-Perioden ein Preis überhaupt berührt wurde — ohne
       Volumen. Beide laufen gleichzeitig und dürfen sich widersprechen: genau dieser
       Widerspruch ist die Aussage.</div>`
-    +`<div class="sh-n">Rollenfarben statt Quellfarben: Gold ist Widerstand, Türkis ist Support,
+    +`<div class="sh-n">Die Farbe liegt jetzt beim TPO: seine Blöcke laufen von Blau für
+      Preise, durch die der Markt nur streifte, bis Rot für die, an denen er den halben
+      Tag stand. Beim Volumenprofil steckt die Stärke schon in der Balkenlänge, deshalb
+      trägt die Farbe dort die andere Frage — Weiß heißt innerhalb der Value Area,
+      Schiefergrau außerhalb.</div>`
+    +`<div class="sh-n">Rollenfarben statt Quellfarben: Gold ist Widerstand, Violett ist Support,
       Beige ist Pivot. Woher ein Level stammt, steht im Text — nie in der Farbe.</div>`);
   $("sheetBody").querySelectorAll("[data-pm]").forEach(el=>el.onclick=()=>{
     S.profileMode=el.dataset.pm; buzz(6);
