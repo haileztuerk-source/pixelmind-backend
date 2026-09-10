@@ -84,6 +84,28 @@ body.immersive .topbar,body.immersive .strip,body.immersive .tabbar{
 }
 body.immersive .tabbar{--hide:110%}
 .strip.tucked{transform:translateY(calc(-100% - var(--topbar-h,62px)));opacity:0}
+
+/* Der Griff steht dort, wo die Leiste war. Er ist die Spur, ohne die
+   eine weggeklappte Flaeche verloren waere - vier sichtbare Bildpunkte
+   auf einem Tippziel von 44. */
+.striphandle{
+  /* Ueber der Leiste (31), nicht darunter: mit z-index 30 lag der Griff
+     hinter der Zeichenflaeche und war nicht antippbar. */
+  position:fixed;top:var(--topbar-h,62px);left:0;right:0;z-index:32;
+  height:22px;display:flex;align-items:center;justify-content:center;
+  background:none;border:none;padding:0;
+  animation:handleIn .22s ease-out;
+}
+.striphandle i{
+  /* Nicht --line: das ist eine Trennlinienfarbe und auf dem fast
+     schwarzen Chartgrund gemessen unsichtbar (#28303C auf #0A0C11).
+     Ein Griff, den man nicht sieht, ist kein Griff. */
+  width:36px;height:4px;border-radius:2px;display:block;
+  background:var(--ink-faint);opacity:.75;
+  box-shadow:0 0 0 4px color-mix(in srgb, var(--ground) 70%, transparent);
+}
+.striphandle:active i{background:var(--resist)}
+@keyframes handleIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
 .idbtn{display:flex;align-items:center;gap:5px;min-height:44px;padding-right:6px}
 .idbtn .nm{font-size:19px;font-weight:800;letter-spacing:-.02em}
 .idbtn .car{color:var(--ink-faint);font-size:11px;margin-top:2px}
@@ -425,6 +447,8 @@ canvas{display:block;width:100%;height:100%}
   <div class="striprow" id="striprow"></div>
   <button class="stripx" id="stripx" aria-label="Marktleiste auf- und zuklappen">⌄</button>
 </nav>
+<button class="striphandle" id="striphandle" hidden
+        aria-label="Marktleiste zurückholen"><i></i></button>
 
 <main class="track" id="track">
   <section class="view chart" id="v-chart">
@@ -564,7 +588,18 @@ let CHROME=124;
 
 function measureChrome(){
   const tb = $("topbar")?.offsetHeight || 62;
-  const st = $("strip")?.offsetHeight || 62;
+  const el = $("strip");
+  // Weggeklappt zaehlt die Leiste nicht mehr mit. Vorher war das
+  // Wegklappen rein optisch - sie schob sich aus dem Bild, aber der
+  // Chart rechnete weiter mit ihrer Hoehe und gewann keinen Millimeter.
+  //
+  // An ihre Stelle tritt aber der Griff, und der braucht sein eigenes
+  // Band. Mit null gerechnet legte sich die Statuszeile ueber ihn und
+  // das Wort "Kerzen" verschwand halb hinter der Pille - zwei Dinge am
+  // selben Platz, von denen keines mehr lesbar war.
+  const weg = el ? el.classList.contains("tucked") : true;
+  const st = weg ? ($("striphandle")?.offsetHeight || 22)
+                 : (el ? el.offsetHeight : 0);
   CHROME = tb + st;
   document.documentElement.style.setProperty("--topbar-h", tb+"px");
   document.documentElement.style.setProperty("--chrome-h", CHROME+"px");
@@ -1414,14 +1449,27 @@ function draw(){
 let drag=null,pinch=null,press=null,tuckTimer=null;
 const wrap=$("cvwrap");
 
-/** Marktleiste waehrend der Geste einklappen und danach zurueckholen -
-    dieselbe Mechanik, mit der Feed-Apps beim Scrollen Platz schaffen. */
+/** Marktleiste beim Arbeiten im Chart wegklappen - dieselbe Mechanik,
+    mit der Feed-Apps beim Scrollen Platz schaffen.
+
+    Sie kommt NICHT von selbst zurueck. Vorher tat sie das nach 1,3
+    Sekunden, und das war das Schlechteste aus beiden Welten: waehrend
+    der Geste sah man sie nicht, und kaum hatte man den Finger gehoben,
+    schob sie sich wieder ueber den Chart - der Platz war nie wirklich
+    da. Jetzt bleibt sie weg, bis man sie holt.
+
+    Damit sie holbar bleibt, tritt ein schmaler Griff an ihre Stelle.
+    Eine Flaeche, die verschwindet, ohne eine Spur zu hinterlassen, ist
+    verloren; ein Griff kostet vier Bildpunkte und sagt, dass da noch
+    etwas ist. */
 function tuck(on){
   const st=$("strip");
-  if(!st) return;
+  if(!st || st.classList.contains("tucked")===!!on) return;
   clearTimeout(tuckTimer);
-  if(on){ st.classList.add("tucked"); }
-  else tuckTimer = setTimeout(()=>st.classList.remove("tucked"), 1300);
+  st.classList.toggle("tucked", !!on);
+  $("striphandle").hidden = !on;
+  // Erst jetzt aendert sich die nutzbare Hoehe wirklich.
+  requestAnimationFrame(()=>{ measureChrome(); draw(); });
 }
 wrap.addEventListener("touchstart",e=>{
   tuck(true);
@@ -1462,7 +1510,6 @@ wrap.addEventListener("touchmove",e=>{
   }
 },{passive:true});
 wrap.addEventListener("touchend",()=>{
-  tuck(false);
   clearTimeout(press);
   if(S.cross!=null){ S.cross=null; draw(); }
   drag=null; pinch=null;
@@ -1571,6 +1618,8 @@ function setStrip(open){
   // werden - sonst zeichnet er unter oder ueber seinen Rahmen hinaus.
   requestAnimationFrame(()=>{ measureChrome(); draw(); });
 }
+$("striphandle").onclick = () => { tuck(false); buzz(6); };
+
 $("stripx").onclick = () => {
   setStrip(!$("strip").classList.contains("full"));
   buzz(6);
@@ -1809,6 +1858,9 @@ function renderPlan(){
 const track=$("track");
 function goto(i){
   S.view=i; buzz(6);
+  // Ausserhalb des Charts gibt es nichts, wofuer die Leiste Platz machen
+  // muesste - dort waere ihr Fehlen nur ein Verlust ohne Gegenwert.
+  if(i!==0) tuck(false);
   track.scrollTo({left:i*track.clientWidth, behavior:"smooth"});
   document.querySelectorAll(".tb").forEach((b,n)=>b.classList.toggle("on",n===i));
   if(i===3){ $("badge").hidden=true; }
