@@ -49,9 +49,34 @@ STATE_PATH = os.environ.get("AGENT_STATE", "terminal_agent_state.json")
 
 
 def _fmt(v, digits=0):
+    """Eine Zahl. Fuer ABSTAENDE - ATR, "42 Punkte entfernt", Netto-GEX."""
     if v is None:
         return "—"
     return f"{v:,.{digits}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _px(v, snap, digits=0):
+    """Ein PREIS, im Preisraum der Anzeige.
+
+    Der Agent schreibt Text, und Text wird nicht mehr umgerechnet - er
+    liegt fertig im Verlauf. Also muss der Versatz schon hier hinein,
+    sonst nennt der Agent andere Zahlen als der Chart daneben. Genau das
+    war der Fall: der Agent schrieb "Zero-Gamma liegt bei 29.134",
+    waehrend der Chart 29.203 zeigte - die 59 Punkte Versatz.
+
+    Getrennt von _fmt() aus demselben Grund wie px() von fmt() im
+    Frontend: in einem Abstand kuerzt sich der Versatz heraus. "Der Kurs
+    steht 20 Punkte ueber dem Zero-Gamma" bleibt wahr, egal in welchem
+    Preisraum gemessen wird.
+
+    Der Versatz des Augenblicks wird mit eingefroren, und das ist
+    richtig: die Nachricht ist eine Aussage ueber einen Zeitpunkt, und
+    zu dem gehoerte dieser Versatz.
+    """
+    if v is None:
+        return "—"
+    off = ((snap or {}).get("space") or {}).get("offset") or 0
+    return _fmt(v + off, digits)
 
 
 class Agent:
@@ -115,7 +140,7 @@ class Agent:
             events.append({
                 "type": "regime_flip",
                 "why": (f"Regime kippt auf {snap['regime'].upper()}-Gamma. "
-                        f"Zero-Gamma {_fmt(snap.get('flip'))}, Kurs {_fmt(spot)}."),
+                        f"Zero-Gamma {_px(snap.get('flip'), snap)}, Kurs {_px(spot, snap)}."),
             })
 
         # Zonen: berührt, verlassen, neu, weggefallen
@@ -130,7 +155,7 @@ class Agent:
             if not was:
                 events.append({
                     "type": "zone_new",
-                    "why": (f"Neue Zone {_fmt(z['bot'])}–{_fmt(z['top'])} "
+                    "why": (f"Neue Zone {_px(z['bot'], snap)}–{_px(z['top'], snap)} "
                             f"({', '.join(z['labels'])})."),
                 })
                 continue
@@ -138,20 +163,20 @@ class Agent:
                 events.append({
                     "type": "zone_touch",
                     "why": (f"Kurs läuft in Zone #{z.get('rank','?')} "
-                            f"{_fmt(z['bot'])}–{_fmt(z['top'])} hinein "
+                            f"{_px(z['bot'], snap)}–{_px(z['top'], snap)} hinein "
                             f"({', '.join(z['labels'])})."),
                 })
             elif not inside(z, spot) and inside(was, prev_spot):
                 events.append({
                     "type": "zone_break",
                     "why": (f"Kurs verlässt Zone #{z.get('rank','?')} "
-                            f"{_fmt(z['bot'])}–{_fmt(z['top'])} — jetzt {_fmt(spot)}."),
+                            f"{_px(z['bot'], snap)}–{_px(z['top'], snap)} — jetzt {_px(spot, snap)}."),
                 })
         for mid, z in prev_zones.items():
             if mid not in now_zones:
                 events.append({
                     "type": "zone_gone",
-                    "why": f"Zone {_fmt(z['bot'])}–{_fmt(z['top'])} ist weggefallen.",
+                    "why": f"Zone {_px(z['bot'], snap)}–{_px(z['top'], snap)} ist weggefallen.",
                 })
 
         # Wandbewegung ueber der Toleranz
@@ -161,7 +186,7 @@ class Agent:
             if a and b and abs(b - a) / a > WALL_MOVE_PCT:
                 events.append({
                     "type": "wall_move",
-                    "why": f"{label} verschoben: {_fmt(a)} → {_fmt(b)}.",
+                    "why": f"{label} verschoben: {_px(a, snap)} → {_px(b, snap)}.",
                 })
 
         # Kalender: hochgewichteter Termin rueckt heran
@@ -243,27 +268,27 @@ class Agent:
         flip, spot = snap.get("flip"), snap.get("spot")
         if flip and spot:
             d = spot - flip
-            parts.append(f"Zero-Gamma liegt bei {_fmt(flip)}, der Kurs {_fmt(abs(d))} Punkte "
+            parts.append(f"Zero-Gamma liegt bei {_px(flip, snap)}, der Kurs {_fmt(abs(d))} Punkte "
                          f"{'darüber' if d > 0 else 'darunter'} — "
                          f"{'ein Rutsch darunter kippt das Regime' if d > 0 else 'eine Rückeroberung kippt es zurück'}.")
         cw, pw = snap.get("call_wall"), snap.get("put_wall")
         if cw and pw:
-            parts.append(f"Rahmen des Tages: Put-Wand {_fmt(pw)}, Call-Wand {_fmt(cw)}.")
+            parts.append(f"Rahmen des Tages: Put-Wand {_px(pw, snap)}, Call-Wand {_px(cw, snap)}.")
         return " ".join(parts)
 
     def _context(self, snap):
         """Datenblock fuer das Modell - kompakt, aber vollstaendig."""
         lines = [
             f"Markt: {snap.get('market_name')} ({snap.get('market')})",
-            f"Kurs: {_fmt(snap.get('spot'))}",
+            f"Kurs: {_px(snap.get('spot'), snap)}",
             f"Gamma-Regime: {snap.get('regime')} (Netto-GEX {_fmt((snap.get('net_gex') or 0)/1e6)} Mio $/Punkt)",
-            f"Zero-Gamma: {_fmt(snap.get('flip'))}",
-            f"Call-Wand: {_fmt(snap.get('call_wall'))}  Put-Wand: {_fmt(snap.get('put_wall'))}",
-            f"Max Pain: {_fmt(snap.get('max_pain'))}  Gamma-Pin: {_fmt(snap.get('gamma_pin'))}",
+            f"Zero-Gamma: {_px(snap.get('flip'), snap)}",
+            f"Call-Wand: {_px(snap.get('call_wall'), snap)}  Put-Wand: {_px(snap.get('put_wall'), snap)}",
+            f"Max Pain: {_px(snap.get('max_pain'), snap)}  Gamma-Pin: {_px(snap.get('gamma_pin'), snap)}",
             f"PCR: {snap.get('pcr')}  ATR: {_fmt(snap.get('atr'))}",
         ]
         for z in snap.get("zones", [])[:4]:
-            lines.append(f"Zone #{z.get('rank')}: {_fmt(z['bot'])}–{_fmt(z['top'])} "
+            lines.append(f"Zone #{z.get('rank')}: {_px(z['bot'], snap)}–{_px(z['top'], snap)} "
                          f"({', '.join(z['labels'])})")
         for e in snap.get("calendar", [])[:3]:
             lines.append(f"Termin in {e['in_minutes']} Min: {e['title']} ({e['impact']})")
@@ -321,20 +346,20 @@ class Agent:
         """Antwort ohne Modell: liest die Lage aus der Engine vor."""
         q = (question or "").lower()
         if any(w in q for w in ("wand", "wall", "widerstand", "support", "boden")):
-            return (f"Put-Wand {_fmt(snap.get('put_wall'))}, Call-Wand {_fmt(snap.get('call_wall'))}, "
-                    f"Zero-Gamma {_fmt(snap.get('flip'))}. Max Pain liegt bei "
-                    f"{_fmt(snap.get('max_pain'))}, der Gamma-Pin bei {_fmt(snap.get('gamma_pin'))}.")
+            return (f"Put-Wand {_px(snap.get('put_wall'), snap)}, Call-Wand {_px(snap.get('call_wall'), snap)}, "
+                    f"Zero-Gamma {_px(snap.get('flip'), snap)}. Max Pain liegt bei "
+                    f"{_px(snap.get('max_pain'), snap)}, der Gamma-Pin bei {_px(snap.get('gamma_pin'), snap)}.")
         if any(w in q for w in ("zone", "level", "marke")):
             zs = snap.get("zones", [])[:3]
             if not zs:
                 return "Aktuell trägt keine Zone genug Konfluenz, um ausgewiesen zu werden."
-            return " ".join(f"Zone #{z.get('rank')}: {_fmt(z['bot'])}–{_fmt(z['top'])} "
+            return " ".join(f"Zone #{z.get('rank')}: {_px(z['bot'], snap)}–{_px(z['top'], snap)} "
                             f"({', '.join(z['labels'])})." for z in zs)
         if any(w in q for w in ("regime", "gamma", "bias", "richtung")):
             return self._template(snap, {"why": "Lage auf Nachfrage:"})
-        return (f"Ohne Modell-Key antworte ich aus der Engine: Kurs {_fmt(snap.get('spot'))}, "
-                f"{snap.get('regime','?').upper()}-Gamma, Zero-Gamma {_fmt(snap.get('flip'))}, "
-                f"Rahmen {_fmt(snap.get('put_wall'))} bis {_fmt(snap.get('call_wall'))}. "
+        return (f"Ohne Modell-Key antworte ich aus der Engine: Kurs {_px(snap.get('spot'), snap)}, "
+                f"{snap.get('regime','?').upper()}-Gamma, Zero-Gamma {_px(snap.get('flip'), snap)}, "
+                f"Rahmen {_px(snap.get('put_wall'), snap)} bis {_px(snap.get('call_wall'), snap)}. "
                 f"Frag nach Zonen, Wänden oder Regime für mehr Detail.")
 
     # ---------------------------------------------------------------- Tagesplan
@@ -375,15 +400,15 @@ class Agent:
                if regime == "short" else
                "Dealer dämpfen Bewegungen — Rücksetzer laufen eher aus als durch."))
         if flip:
-            struktur.append(f"Pivot / Zero-Gamma: {_fmt(flip)}. "
+            struktur.append(f"Pivot / Zero-Gamma: {_px(flip, snap)}. "
                             f"Kurs steht {_fmt(abs((spot or 0) - flip))} Punkte "
                             f"{'darüber' if (spot or 0) > flip else 'darunter'}.")
         if snap.get("call_wall"):
-            struktur.append(f"Haupt-Widerstand: Call-Wand {_fmt(snap['call_wall'])}.")
+            struktur.append(f"Haupt-Widerstand: Call-Wand {_px(snap['call_wall'], snap)}.")
         if snap.get("put_wall"):
-            struktur.append(f"Haupt-Unterstützung: Put-Wand {_fmt(snap['put_wall'])}.")
+            struktur.append(f"Haupt-Unterstützung: Put-Wand {_px(snap['put_wall'], snap)}.")
         for z in zs[:3]:
-            struktur.append(f"Zone #{z.get('rank')}: {_fmt(z['bot'])}–{_fmt(z['top'])} "
+            struktur.append(f"Zone #{z.get('rank')}: {_px(z['bot'], snap)}–{_px(z['top'], snap)} "
                             f"({', '.join(z['labels'])}).")
 
         if regime == "short":
@@ -394,15 +419,15 @@ class Agent:
                     "Wänden eher als der Ausbruch.")
         if flip and spot:
             bias += (f" Kipp-Punkt: ein nachhaltiges Etablieren "
-                     f"{'unter' if spot > flip else 'über'} {_fmt(flip)} dreht das Bild.")
+                     f"{'unter' if spot > flip else 'über'} {_px(flip, snap)} dreht das Bild.")
 
         watch = []
         for z in zs[:3]:
-            watch.append(f"Reaktion an Zone #{z.get('rank')} {_fmt(z['bot'])}–{_fmt(z['top'])}: "
+            watch.append(f"Reaktion an Zone #{z.get('rank')} {_px(z['bot'], snap)}–{_px(z['top'], snap)}: "
                          f"hält die Kante oder bricht sie?")
         if snap.get("max_pain") and spot:
             d = snap["max_pain"] - spot
-            watch.append(f"Max Pain {_fmt(snap['max_pain'])} liegt {_fmt(abs(d))} Punkte "
+            watch.append(f"Max Pain {_px(snap['max_pain'], snap)} liegt {_fmt(abs(d))} Punkte "
                          f"{'über' if d > 0 else 'unter'} dem Kurs — Sog in den Verfall.")
         for e in snap.get("calendar", [])[:2]:
             watch.append(f"{e['title']} in {e['in_minutes']} Minuten ({e['impact']}).")
@@ -413,7 +438,7 @@ class Agent:
         return {
             "rueckblick": (
                 f"ATR {_fmt(atr_v)} Punkte. Spanne der Sitzung "
-                f"{snap.get('on_day') or ''}: {_fmt(snap.get('on_low'))}–{_fmt(snap.get('on_high'))}"
+                f"{snap.get('on_day') or ''}: {_px(snap.get('on_low'), snap)}–{_px(snap.get('on_high'), snap)}"
                 + (f" ({(snap['on_high'] - snap['on_low']) / atr_v:.2f} ATR)."
                    if atr_v and snap.get('on_high') and snap.get('on_low') else ".")),
             "nachrichten": nachrichten,
@@ -438,7 +463,7 @@ class Agent:
                                 ("put_wall", "Put-Wand")):
                 old, new = a.get(name), snap.get(name)
                 if old and new and abs(new - old) > max(0.15 * atr_v, old * WALL_MOVE_PCT):
-                    reasons.append(f"{label} {_fmt(old)} → {_fmt(new)}")
+                    reasons.append(f"{label} {_px(old, snap)} → {_px(new, snap)}")
             if not reasons:
                 return None
             note = {"ts": datetime.now(timezone.utc).isoformat(),
