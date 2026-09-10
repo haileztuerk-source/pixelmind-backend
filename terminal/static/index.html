@@ -951,13 +951,61 @@ function drawOrbs(ctx, bars, y, bw, pw, ph, V, topPad){
   let peak = 0;
   tracks.forEach(tk=>{
     tk.points.forEach(q=>{
-      rec.set(`${tk.chain}|${tk.side}|${tk.strike}|${q.t}`, q.oi);
+      rec.set(`${tk.chain}|${tk.side}|${tk.strike}|${q.t}`, q);
       const n = nom(q.oi, tk.strike);
       if(n > peak) peak = n;
     });
   });
   walls.forEach(w=>{ const n = nom(w.oi, w.strike); if(n > peak) peak = n; });
   if(peak <= 0) return;
+
+  // PULS: was in DIESEN zwei Minuten am Strike geschah.
+  //
+  // Das Band war bisher ueber den ganzen Tag gleich hell, und das war
+  // kein Darstellungsfehler, sondern eine Folge der Datenlage: moduliert
+  // wurde mit dem Open Interest, und der steht waehrend der Sitzung
+  // still - die OCC rechnet ihn ueber Nacht. Gemessen an einem 0DTE-Call
+  // mit 731 Kontrakten Tagesumsatz und Open Interest null ist das kein
+  // Zweifelsfall. Ein Band, das aus OI gebaut ist, KANN nicht atmen.
+  //
+  // Das gehandelte Volumen laeuft dagegen live mit. Es ist ueber den Tag
+  // kumuliert, also sagt erst die DIFFERENZ zweier Stuetzstellen, was
+  // gerade passiert: ein Sprung heisst, dass an diesem Strike in diesem
+  // Zeitfenster gehandelt wurde. Genau das soll man sehen.
+  //
+  // Die Groessenordnung rechtfertigt den Aufwand: im Band um den Kurs
+  // wurden heute 76.858 Kontrakte gehandelt gegen 39.136 stehendes OI -
+  // 196 Prozent Umschlag. Das meiste Geschehen taucht in keinem OI je
+  // auf.
+  const puls = new Map();
+  const alle = [];
+  tracks.forEach(tk=>{
+    const pts = tk.points;
+    for(let i=0;i<pts.length;i++){
+      const vPrev = i ? (pts[i-1].v || 0) : (pts[i].v || 0);
+      // Nur Zuwachs zaehlt. Faellt der kumulierte Wert (neuer Tag,
+      // Neustart der Bruecke), ist das kein Handel, sondern ein
+      // Zaehlerwechsel - und der darf nicht als Ausbruch aufleuchten.
+      const dv = Math.max(0, (pts[i].v || 0) - vPrev);
+      puls.set(`${tk.chain}|${tk.side}|${tk.strike}|${pts[i].t}`, dv);
+      if(dv > 0) alle.push(dv);
+    }
+  });
+  // Bezug ist das 95. Perzentil, nicht das Maximum - dieselbe Lehre wie
+  // beim Volumenprofil. Gemessen: ein einzelner Sprung von 161.995 gegen
+  // einen Median von 29 (der Rekorder schrieb eine Reihe mit dem
+  // kumulierten Tagesvolumen fort). Gegen dieses Maximum normiert waere
+  // jeder echte Schub auf zwei Promille Helligkeit gefallen - das ganze
+  // Band waere wieder flach gewesen, diesmal aus dem umgekehrten Grund.
+  //
+  // Das oberste Prozent laeuft dafuer an den Anschlag. Bei einem
+  // Ausbruch ist das kein Verlust: dass er stattfand, sagt schon der
+  // Vollausschlag, und wie weit er das Perzentil uebertraf, ist fuer die
+  // Frage "hier passiert gerade etwas" ohne Belang.
+  alle.sort((a,b)=>a-b);
+  const pulsPeak = alle.length
+    ? Math.max(alle[Math.min(alle.length-1, Math.floor(alle.length*0.95))], 1)
+    : 0;
 
   // Schrittweite: nie enger als vier Bildpunkte, sonst zeichnen sich die
   // Orbs uebereinander und kosten nur Rechenzeit.
@@ -978,15 +1026,33 @@ function drawOrbs(ctx, bars, y, bw, pw, ph, V, topPad){
       // aktuellen Bestand, sonst gilt der aktuelle als Annahme.
       const slot = t - (t % bucket);
       const measured = rec.get(`${key}|${slot}`);
-      const oi = measured != null ? measured : w.oi;
+      const oi = measured ? measured.oi : w.oi;
       const rel = Math.min(1, nom(oi, w.strike) / peak);
-      const r = Math.round((1.1 + 3.4 * Math.sqrt(rel)) * 2) / 2;
+
+      // Der Puls dieses Zeitfensters. Wurzel statt linear, damit auch
+      // maessiger Handel sichtbar wird und nicht nur der eine Ausreisser
+      // des Tages alles andere flach druckt.
+      const dv = measured ? (puls.get(`${key}|${slot}`) || 0) : 0;
+      const imp = pulsPeak > 0 ? Math.sqrt(Math.min(1, dv / pulsPeak)) : 0;
+
+      // Das Fundament traegt die Groesse, der Puls legt darauf. So bleibt
+      // die Wand auch in einer stillen Minute sichtbar, statt zu
+      // verschwinden - sie ist ja weiter da, es geschieht nur nichts.
+      const r = Math.round((1.1 + 3.4*Math.sqrt(rel) + 2.6*imp) * 2) / 2;
       const sp = orbSprite(col, r);
       // Nicht gemessene Abschnitte deutlich zurueckgenommen: das Band
       // zeigt, DASS die Wand da ist, ohne eine Staerke zu behaupten,
       // die nicht erhoben wurde.
-      ctx.globalAlpha = measured != null ? (0.34 + 0.55*rel) : (0.17 + 0.30*rel);
+      const base = measured ? (0.30 + 0.42*rel) : (0.17 + 0.30*rel);
+      ctx.globalAlpha = Math.min(1, base + 0.55*imp);
       ctx.drawImage(sp.canvas, x - sp.pad, yy - sp.pad, sp.pad*2, sp.pad*2);
+      // Kraeftiger Puls bekommt einen zweiten, weichen Aufschlag - das
+      // ist das Aufleuchten, das eine Stelle im Band vom Rest abhebt.
+      if(imp > 0.45){
+        const gl = orbSprite(col, r + 2.2 + 2.4*imp);
+        ctx.globalAlpha = 0.13 + 0.30*imp;
+        ctx.drawImage(gl.canvas, x - gl.pad, yy - gl.pad, gl.pad*2, gl.pad*2);
+      }
       if(isIndex && measured != null && r > 2.5){
         ctx.globalAlpha = 0.8; ctx.strokeStyle = col; ctx.lineWidth = 1/dpr*1.2;
         ctx.beginPath(); ctx.arc(x, yy, r + 1.6, 0, 6.2832); ctx.stroke();

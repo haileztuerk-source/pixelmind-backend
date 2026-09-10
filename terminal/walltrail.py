@@ -81,12 +81,27 @@ class WallTrail:
                 pts = tr["points"]
                 # Je Bucket eine Stuetzstelle; ein zweiter Lauf im selben
                 # Fenster aktualisiert sie, statt eine Dublette zu legen.
+                # Was je Stuetzstelle festgehalten wird - und warum:
+                #
+                #   oi  steht waehrend der Sitzung still. Die OCC rechnet
+                #       ihn ueber Nacht; gemessen an einem 0DTE-Call mit
+                #       731 Kontrakten Tagesumsatz und Open Interest null
+                #       ist das kein Zweifelsfall. Er beschreibt das
+                #       Fundament der Wand, nicht ihr Leben.
+                #   g   Dollar-Gamma. Laeuft live mit, weil Spot und
+                #       implizite Vola laufen.
+                #   v   gehandeltes Volumen am Strike, kumuliert ueber den
+                #       Tag. Erst die Differenz zweier Stuetzstellen sagt,
+                #       was in diesen zwei Minuten wirklich geschah - und
+                #       das ist die einzige Groesse hier, die einen
+                #       Zeitpunkt beschreibt statt eines Bestands.
+                snapshot = {"p": round(w["price"], 2), "oi": w["oi"],
+                            "g": round(w["gex"], 1),
+                            "v": round(w.get("vol") or 0.0)}
                 if pts and pts[-1]["t"] == b:
-                    pts[-1].update({"p": round(w["price"], 2), "oi": w["oi"],
-                                    "g": round(w["gex"], 1)})
+                    pts[-1].update(snapshot)
                 else:
-                    pts.append({"t": b, "p": round(w["price"], 2),
-                                "oi": w["oi"], "g": round(w["gex"], 1)})
+                    pts.append({"t": b, **snapshot})
                     changed = True
                 tr["points"] = [q for q in pts if q["t"] >= cutoff]
                 tr["last"] = b
