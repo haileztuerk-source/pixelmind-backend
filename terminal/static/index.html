@@ -1773,8 +1773,15 @@ function draw(){
     const col = up?upC:dnC;
     // Docht auf das Geraetepixel rasten, sonst franst eine 1px-Linie aus
     const wx = snap(x+bw/2)+half();
-    ctx.strokeStyle=col; ctx.lineWidth=Math.max(1/dpr, bw*0.055);
+    // Runde Kappe statt der Standardkappe: bei starkem Herauszoomen
+    // fallen Hoch und Tief auf denselben Geraetepixel, aus dem Docht
+    // wird eine Strecke der Laenge null - und die zeichnet mit der
+    // Standardkappe GAR NICHTS. Mit runder Kappe bleibt an dieser
+    // Stelle wenigstens ein Punkt in Linienbreite stehen. Eine Kerze
+    // verschwindet damit nie restlos, egal wie weit die Skala steht.
+    ctx.strokeStyle=col; ctx.lineWidth=Math.max(1/dpr, bw*0.055); ctx.lineCap="round";
     ctx.beginPath(); ctx.moveTo(wx,snap(y(b.h))); ctx.lineTo(wx,snap(y(b.l))); ctx.stroke();
+    ctx.lineCap="butt";
     const t=snap(y(Math.max(b.o,b.c))), bo=snap(y(Math.min(b.o,b.c)));
     const h=Math.max(1/dpr, bo-t), bx=snap(x+(bw-cw)/2);
     // Leichter Verlauf im Koerper: gibt der Kerze Volumen, ohne dass die
@@ -2101,14 +2108,23 @@ function skalaJetzt(){
     Ohne Grenzen laesst sich der Chart in einer einzigen Wischbewegung so
     weit verstellen, dass gar nichts mehr im Bild ist - und dann sieht er
     kaputt aus, nicht verstellt. Bezug ist die Spanne, die die Automatik
-    ergeben haette: hoechstens das Sechzigfache davon, mindestens ein
-    Sechzigstel, und die Mitte hoechstens fuenf Spannen vom Kurs weg. */
+    ergeben haette: hoechstens das Achtfache davon, mindestens ein
+    Achtel, und die Mitte hoechstens fuenf Spannen vom Kurs weg.
+
+    War vorher das 25-fache. Ein Zusammenziehen der Finger reicht, um
+    diese Grenze zu erreichen, und bei ~140 Punkten normaler Spanne
+    ergab das 25-fache 3.500 Punkte - jede Kerze darin unter einem
+    Bildpunkt gequetscht und faktisch weg, nur die Wandketten blieben
+    stehen. Ein Bild ohne eine einzige sichtbare Kerze sieht nicht nach
+    "weit herausgezoomt" aus, es sieht nach kaputt aus. Das Achtfache
+    zeigt entfernte Waende immer noch, laesst der Kursbewegung selbst
+    aber ihren Platz. */
 function setzeSkala(lo, hi){
   if(!(hi > lo) || !isFinite(lo) || !isFinite(hi)) return;
   const a = S.autoScale;
   if(a && a.hi > a.lo){
     const aR = a.hi - a.lo, aM = (a.hi + a.lo) / 2;
-    let r = Math.max(aR/25, Math.min(aR*25, hi - lo));
+    let r = Math.max(aR/8, Math.min(aR*8, hi - lo));
     let m = (hi + lo) / 2;
     m = Math.max(aM - aR*5, Math.min(aM + aR*5, m));
     lo = m - r/2; hi = m + r/2;
@@ -2154,20 +2170,16 @@ wrap.addEventListener("touchstart",e=>{
     // der eigentliche Grund, warum sich der Chart nicht bewegen liess.
     drag={x:cx, y:cy, i0:S.vw?.i0||0, sp:span(), achse:achse,
           lo:sc?sc.lo:0, hi:sc?sc.hi:0, t:Date.now(), moved:false};
-    // Die Preisskala einfrieren, sobald jemand den Chart anfasst.
+    // Eingefroren wird NICHT schon hier, sondern bei der ersten
+    // wirklichen Bewegung - siehe touchmove.
     //
-    // Sie rechnete sich in JEDEM Bild neu aus den gerade sichtbaren
-    // Kerzen aus. Beim Schieben hiess das: mit jedem hereinlaufenden
-    // Hoch sprang die Skala, der Chart atmete unter dem Finger und
-    // dieselbe Kerze sass nie zweimal an derselben Stelle. Zum Lesen
-    // eines Charts gehoert aber, dass der Massstab stillsteht, waehrend
-    // man sich darin bewegt.
-    //
-    // Festgehalten wird genau der Stand, der gerade zu sehen ist - es
-    // gibt also keinen Sprung im Moment des Anfassens. AUTO gibt die
-    // Automatik samt Kurs-in-der-Mitte wieder frei, und jeder Wechsel
-    // von Markt oder Zeitebene tut es von selbst.
-    if(!S.vs && sc) S.vs = {lo:sc.lo, hi:sc.hi};
+    // Vorher fror ein blosses Antippen die Skala sofort ein - auch der
+    // Beginn jedes langen Druecks fuers Fadenkreuz, auch ein Verwackler
+    // beim Scrollen einer anderen Leiste. Sichtbar aenderte sich dabei
+    // nichts, denn eingefroren wurde genau der Stand, der schon zu
+    // sehen war - aber von da an folgte die Skala dem Kurs nicht mehr,
+    // ohne dass der Nutzer etwas dafuer getan hatte. Erst eine Geste,
+    // die tatsaechlich etwas verschiebt, verdient das Einfrieren.
     if(!achse) press=setTimeout(()=>{ // langes Drücken blendet das Fadenkreuz ein
       S.cross=iBeiX(cx); buzz(8); paint();
     },380);
@@ -2178,7 +2190,8 @@ wrap.addEventListener("touchstart",e=>{
            sp:span(), i0:S.vw?.i0||0,
            mx:(a.clientX+b.clientX)/2, my:(a.clientY+b.clientY)/2,
            lo:sc?sc.lo:0, hi:sc?sc.hi:0};
-    if(!S.vs && sc) S.vs = {lo:sc.lo, hi:sc.hi};   // siehe oben
+    // Eingefroren wird erst, wenn die Geste tatsaechlich zoomt - siehe
+    // touchmove und die Begruendung bei touchstart oben.
     drag=null;
   }
 },{passive:true});
@@ -2193,6 +2206,8 @@ wrap.addEventListener("touchmove",e=>{
     // auseinanderstehen. Bei einem waagerechten Griff ist der senkrechte
     // Abstand ein paar Bildpunkte Zittern - daraus einen Zoomfaktor zu
     // rechnen hiesse, die Preisskala bei jeder Zeitgeste mitzureissen.
+    if(!S.vs && pinch.hi>pinch.lo && (Math.abs(dx-pinch.dx)>10 || Math.abs(dy-pinch.dy)>10))
+      S.vs = {lo:pinch.lo, hi:pinch.hi};
     if(pinch.dx>24 && dx>24){
       const sp2=Math.max(10,Math.min(n,pinch.sp*(pinch.dx/dx)));
       // Um den Mittelpunkt der Geste, nicht um die Bildmitte: der Punkt
@@ -2215,7 +2230,13 @@ wrap.addEventListener("touchmove",e=>{
     // Drei Bildpunkte statt sechs. Sechs waren auf einem 3x-Bildschirm
     // fast zwei Millimeter tote Zone am Anfang jeder Geste, und genau
     // dieser Anfang entscheidet, ob sich etwas fluessig anfuehlt.
-    if(!drag.moved && Math.abs(dx)+Math.abs(dy)>3){ clearTimeout(press); drag.moved=true; }
+    if(!drag.moved && Math.abs(dx)+Math.abs(dy)>3){
+      clearTimeout(press); drag.moved=true;
+      // Jetzt erst einfrieren - siehe touchstart. Genau der Stand, der
+      // in diesem Moment zu sehen ist, damit es beim Loslegen keinen
+      // Sprung gibt.
+      if(!S.vs && drag.hi>drag.lo) S.vs = {lo:drag.lo, hi:drag.hi};
+    }
     if(S.cross!=null){ S.cross=iBeiX(t.clientX); paint(); return; }
     if(!drag.moved) return;
     if(drag.achse){
@@ -2242,17 +2263,35 @@ wrap.addEventListener("touchmove",e=>{
     paint();
   }
 },{passive:true});
+/** Der letzte kurze Tipp - fuer die Doppeltipp-Erkennung unten. */
+let letzterTipp = {t:0, x:0, y:0};
 wrap.addEventListener("touchend",e=>{
   clearTimeout(press);
   if(S.cross!=null){ S.cross=null; paint(); }
+  const t=e.changedTouches && e.changedTouches[0];
+  let zurueckgesetzt = false;
   // Kurzes Tippen auf AUTO gibt die Skala an die Automatik zurueck.
-  const b=S.autoBtn, t=e.changedTouches && e.changedTouches[0];
+  const b=S.autoBtn;
   if(b && t && drag && !drag.moved){
     const r=cv.getBoundingClientRect();
     const x=t.clientX-r.left, yy=t.clientY-r.top;
     if(x>=b.x-4 && x<=b.x+b.w+4 && yy>=b.y-6 && yy<=b.y+b.h+6){
       // Beides zurueck: Skala an die Automatik, Ausschnitt an den Kurs.
-      S.vs=null; fitView(); buzz(8); paint();
+      S.vs=null; fitView(); buzz(8); paint(); zurueckgesetzt = true;
+    }
+  }
+  // Doppeltipp irgendwo auf dem Chart tut dasselbe - die Geste, die man
+  // aus praktisch jeder Chart-App kennt, und griffbereiter als der
+  // kleine AUTO-Schalter, wenn die Skala gerade weit draussen steht und
+  // der Schalter selbst kaum noch zu treffen ist.
+  if(!zurueckgesetzt && t && drag && !drag.moved){
+    const jetzt = Date.now();
+    const dx = t.clientX-letzterTipp.x, dy = t.clientY-letzterTipp.y;
+    if(jetzt-letzterTipp.t < 320 && Math.abs(dx)<30 && Math.abs(dy)<30){
+      S.vs=null; fitView(); buzz(10); paint();
+      letzterTipp.t = 0;                     // verbraucht, kein Zaehler fuer einen dritten Tipp
+    } else {
+      letzterTipp = {t:jetzt, x:t.clientX, y:t.clientY};
     }
   }
   drag=null; pinch=null;
