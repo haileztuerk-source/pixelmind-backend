@@ -496,13 +496,34 @@ const S = {
   market:"NQ", tf:"15m", data:null, plan:null, messages:[], overview:[],
   view:0, profileMode:"heat", layers:{tpo:false, va:true, gpbox:true, gcurve:false, orbs:true, fix:true, live:true, zonen:true, profil:true, session:true},
   fitAll:false, immersive:false, lastMsgCount:0, busy:false, cross:null, trails:null,
+  // Preisfenster von Hand. null heisst: die Automatik entscheidet und der
+  // Kurs steht in der Mitte. Sobald jemand an der Skala zieht, steht hier
+  // ein Fenster und die Automatik schweigt, bis AUTO es wieder loescht.
+  vs:null, autoScale:null, geo:null, autoBtn:null,
 };
 const TFS = ["1m","5m","15m","30m","1h","1d"];
 const SYM = {NQ:"NDX", ES:"SPX", YM:"DJX", RTY:"RUT", GC:"GLD"};
 
 const $ = id => document.getElementById(id);
-const fmt = (v,d=0) => (v==null||isNaN(v)) ? "—"
-  : v.toLocaleString("de-DE",{minimumFractionDigits:d,maximumFractionDigits:d});
+/** Zahlen mit deutschen Tausenderpunkten.
+
+    Die Formatierer werden gemerkt. v.toLocaleString(..., {optionen})
+    baut bei JEDEM Aufruf einen neuen Intl-Formatierer auf, und das ist
+    keine Kleinigkeit: gemessen ging ein Drittel der Rechenzeit eines
+    Bildes allein dafuer drauf - 33 Prozent, verteilt auf die Preisleiter,
+    die Level-Schilder, das Fadenkreuz und jede Zahl in den Tafeln.
+    Derselbe Formatierer, einmal gebaut, macht daraus einen Bruchteil. */
+const _nf = new Map();
+function nfmt(d){
+  let f = _nf.get(d);
+  if(!f){
+    f = new Intl.NumberFormat("de-DE",
+        {minimumFractionDigits:d, maximumFractionDigits:d});
+    _nf.set(d, f);
+  }
+  return f;
+}
+const fmt = (v,d=0) => (v==null||isNaN(v)) ? "—" : nfmt(d).format(v);
 /** Ein PREIS zur Anzeige. Verschiebt in den Preisraum des Brokers.
 
     Getrennt von fmt(), und das ist der ganze Punkt: fmt() bleibt fuer
@@ -555,11 +576,20 @@ async function load(){
     if(!r.ok) throw 0;
     const d = await r.json();
     const fresh = !S.data || S.data.market!==d.market || S.data.interval!==d.interval;
+    // Stand der Ausschnitt am rechten Rand, laeuft er mit. Sonst faellt
+    // der Chart im Lauf der Sitzung still hinter den Kurs zurueck - man
+    // sieht ein Bild, das aussieht wie jetzt und eine Stunde alt ist.
+    const nAlt = (S.data?.bars||[]).length;
+    const amRand = S.vw ? (S.vw.i1 >= nAlt - 0.6) : true;
     S.data = d;
     // Versatz in den Preisraum des Brokers. Steht an genau dieser einen
     // Stelle im Zustand; px() liest ihn, sonst niemand.
     S.off = (d.space && d.space.offset) || 0;
-    if(fresh || !S.view0) fitView();
+    if(fresh || !S.view0){ fitView(); S.vs = null; }
+    else if(amRand && S.vw){
+      const zu = d.bars.length - nAlt;
+      if(zu > 0){ S.vw.i0 += zu; S.vw.i1 += zu; clampView(); }
+    }
     S.view0 = true;
     render();
   }catch(e){}
@@ -567,7 +597,7 @@ async function load(){
 async function loadTrails(){
   try{
     S.trails = await (await fetch(`/api/trails?market=${S.market}`)).json();
-    draw();
+    paint();
   }catch(e){}
 }
 async function loadOverview(){
@@ -614,8 +644,40 @@ function measureChrome(){
   document.documentElement.style.setProperty("--chrome-h", CHROME+"px");
 }
 
+/** Die Farben des Stilbogens, einmal gelesen.
+
+    Sie stehen als CSS-Variablen und aendern sich nie - es gibt keinen
+    Hell-Modus und keinen Umschalter. Sie bei jedem Zugriff neu abzufragen
+    hiess, den Layoutbaum zu befragen, und zwar innerhalb der Schleifen,
+    die ueber tausend Profilbaender und jede Perle laufen. */
+let TH = {};
+const THEMA = ["--ground","--panel","--panel-2","--panel-3","--line","--line-soft",
+  "--ink","--ink-dim","--ink-faint","--resist","--support","--pivot","--struct",
+  "--va","--agent","--warn","--up","--down","--mono","--sans"];
+function readTheme(){
+  const cs = getComputedStyle(document.documentElement);
+  TH = {};
+  THEMA.forEach(k => TH[k] = cs.getPropertyValue(k).trim());
+}
+readTheme();
+
+/** Zeichnen auf den naechsten Bildaufbau buendeln.
+
+    touchmove feuert auf neueren Telefonen bis zu 120 mal je Sekunde.
+    Jedes Ereignis sofort zu zeichnen hiess, mehr Bilder zu rechnen als der
+    Bildschirm zeigen kann - die Warteschlange lief voll und der Chart
+    hinkte dem Finger hinterher. Gemessen kostete ein Bild 26 ms; bei 120
+    Ereignissen je Sekunde waren das drei Sekunden Arbeit je Sekunde Wisch.
+    Gebuendelt wird hoechstens einmal je Bildaufbau gezeichnet. */
+let rafId = 0;
+function paint(){
+  if(rafId) return;
+  rafId = requestAnimationFrame(()=>{ rafId = 0; draw(); });
+}
+
 function resize(){
   measureChrome();
+  readTheme();
   const w=$("cvwrap");
   // Bis Faktor 3 statt 2: ein iPhone Pro zeichnet damit auf dem echten
   // Panelraster statt auf zwei Dritteln davon.
@@ -626,6 +688,51 @@ function resize(){
   ctx.textRendering = "geometricPrecision";
   ORB_SPRITES.clear();
   draw();
+}
+
+/** Grund und Vignette sind Bilder, keine Rechnungen.
+
+    Beide sind Verlaeufe ueber die ganze Flaeche - bei Faktor 3 sind das
+    1236 mal 2574 Geraetepixel, die der Browser in jedem Bild neu
+    ausmischt. Sie aendern sich aber nur, wenn sich das Fenster aendert.
+    Einmal gebacken und danach kopiert kostet dasselbe wie ein Bild
+    zeichnen statt wie hundert. */
+let _hg = {k:"", grund:null, vig:null};
+function hintergrund(topPad, pw, ph){
+  const k = [W,H,dpr,topPad,pw,ph,TH["--ground"]].join("|");
+  if(_hg.k === k) return _hg;
+  const mach = () => {
+    const c = document.createElement("canvas");
+    c.width = Math.round(W*dpr); c.height = Math.round(H*dpr);
+    const g = c.getContext("2d"); g.setTransform(dpr,0,0,dpr,0,0);
+    return [c, g];
+  };
+  const [cg, gg] = mach();
+  const bg = gg.createLinearGradient(0,0,0,H);
+  bg.addColorStop(0, TH["--panel"]); bg.addColorStop(0.55, TH["--ground"]);
+  bg.addColorStop(1, TH["--ground"]);
+  gg.fillStyle = bg; gg.fillRect(0,0,W,H);
+
+  const [cv2, gv] = mach();
+  const vig = gv.createRadialGradient(W*0.45, H*0.45, Math.min(W,H)*0.35,
+                                      W*0.45, H*0.45, Math.max(W,H)*0.78);
+  vig.addColorStop(0, "rgba(0,0,0,0)");
+  vig.addColorStop(1, "rgba(0,0,0,0.30)");
+  gv.fillStyle = vig; gv.fillRect(0,0,pw,topPad+ph);
+
+  _hg = {k, grund:cg, vig:cv2};
+  return _hg;
+}
+
+/** Textbreiten merken. measureText ist eine Messung im Schriftsystem und
+    kostet je Aufruf; die Beschriftungen der Level sind bei jedem Bild
+    dieselben und aendern sich nur mit den Daten. */
+const _mw = new Map();
+function textW(ctx, txt){
+  const k = ctx.font + "\u0000" + txt;
+  let w = _mw.get(k);
+  if(w === undefined){ w = ctx.measureText(txt).width; if(_mw.size > 600) _mw.clear(); _mw.set(k, w); }
+  return w;
 }
 
 /** Auf das Geraetepixel rasten. Eine Linie auf halbem CSS-Pixel ist bei
@@ -643,11 +750,6 @@ function clampView(){
   const n=(S.data?.bars||[]).length; if(!n||!S.vw) return;
   const sp=Math.max(10, Math.min(n, S.vw.i1-S.vw.i0));
   S.vw.i0=Math.max(0, Math.min(n-sp, S.vw.i0)); S.vw.i1=S.vw.i0+sp;
-}
-function vbars(){
-  const b=S.data?.bars||[]; if(!b.length) return [];
-  const v=S.vw||{i0:0,i1:b.length};
-  return b.slice(Math.max(0,Math.floor(v.i0)), Math.min(b.length,Math.ceil(v.i1)));
 }
 
 
@@ -685,6 +787,22 @@ function levelColor(kind){
   return "--struct";
 }
 
+/** Die Levelliste aendert sich mit den Daten, nicht mit dem Ausschnitt.
+
+    Sie bei jedem Bild neu zu bauen hiess, waehrend eines Wischs sechzig
+    mal dieselbe Liste aus denselben Zahlen zusammenzusetzen. Sie haengt
+    an den geladenen Daten und an den Schaltern - beides steht waehrend
+    einer Geste still. */
+let _lvCache = {d:null, tr:null, k:"", v:null};
+function chartLevelsCached(){
+  const k = [S.layers.fix, S.layers.live, S.layers.session, S.layers.zonen,
+             S.data?.spot].join("|");
+  if(_lvCache.d === S.data && _lvCache.tr === S.trails && _lvCache.k === k)
+    return _lvCache.v;
+  _lvCache = {d:S.data, tr:S.trails, k, v:chartLevels()};
+  return _lvCache.v;
+}
+
 function chartLevels(){
   const d=S.data; if(!d) return [];
   const out=[];
@@ -713,18 +831,34 @@ function chartLevels(){
 /** Zeitstempel auf die X-Achse abbilden - ueber die Bars, nicht linear.
     Zwischen zwei Sitzungen klafft eine Luecke, die eine reine
     Zeitrechnung falsch auffuellen wuerde. */
-function tToX(ts, bars, bw){
-  const n = bars.length;
-  if(n < 2) return bw/2;
-  if(ts <= bars[0].t) return bw/2;
-  if(ts >= bars[n-1].t){
-    const step = bars[n-1].t - bars[n-2].t || 60;
-    return Math.min(n - 1 + (ts - bars[n-1].t)/step, n - 0.5)*bw + bw/2;
+/** Zeitpunkt -> Balkenindex, als Bruch.
+
+    Sucht in der VOLLEN Reihe, nicht im sichtbaren Ausschnitt. Vorher hing
+    das Ergebnis am Anfang des Ausschnitts und musste bei jedem Schieben
+    neu gedeutet werden; im absoluten Index ist es eine Eigenschaft des
+    Zeitpunkts allein. */
+function tToI(ts, all){
+  const n = all.length;
+  if(n < 2) return 0;
+  if(ts <= all[0].t) return 0;
+  if(ts >= all[n-1].t){
+    const step = all[n-1].t - all[n-2].t || 60;
+    return n - 1 + (ts - all[n-1].t)/step;
   }
   let lo=0, hi=n-1;
-  while(lo < hi-1){ const m=(lo+hi)>>1; if(bars[m].t <= ts) lo=m; else hi=m; }
-  const span = (bars[hi].t - bars[lo].t) || 1;
-  return (lo + (ts - bars[lo].t)/span)*bw + bw/2;
+  while(lo < hi-1){ const m=(lo+hi)>>1; if(all[m].t <= ts) lo=m; else hi=m; }
+  const span = (all[hi].t - all[lo].t) || 1;
+  return lo + (ts - all[lo].t)/span;
+}
+
+/** Runde Schrittweite fuer eine Preisleiter.
+
+    1, 2, 2,5 oder 5 mal eine Zehnerpotenz - andere Schritte liest niemand
+    ab. 25 Punkte sind eine Marke, 23,7 sind eine Rechnung. */
+function niceStep(range, want){
+  const roh = Math.max(1e-9, range / Math.max(1, want));
+  const p = Math.pow(10, Math.floor(Math.log10(roh))), k = roh / p;
+  return (k <= 1 ? 1 : k <= 2 ? 2 : k <= 2.5 ? 2.5 : k <= 5 ? 5 : 10) * p;
 }
 
 /** Volumenprofil, zweigeteilt nach gehandelter Optionsseite.
@@ -754,7 +888,21 @@ function drawTPO(ctx, y, pw, ph, topPad, V){
   const cell = 3.0, gap = 1.0;
   const maxCells = Math.max(1, Math.floor(Math.min(52, pw*0.14) / (cell+gap)));
   const colW = maxCells*(cell+gap) + 8;
-  const rowH = Math.max(1.2, ph / (tp.bins_n || 180));
+  // Blockhoehe aus der ECHTEN Hoehe eines Preisbands, nicht aus
+  // ph/Baenderzahl. Der alte Ausdruck unterstellte, dass das TPO immer
+  // genau die sichtbare Preisspanne fuellt - gemessen fuellte es das
+  // 1,43-fache, und jeder Block wurde entsprechend zu kurz gezeichnet.
+  // Solange die Skala sich von selbst nach den Kerzen richtete, fiel das
+  // nicht auf; seit man an ihr ziehen kann, waere die Blockhoehe beim
+  // Zoomen als einzige stehengeblieben.
+  //
+  // Der Massstab steckt in y() selbst: y(0)-y(1) ist, wieviele
+  // Bildpunkte ein Preispunkt gerade misst. Die 0,82 lassen die Luecke
+  // stehen, an der man die Bloecke abzaehlt - beim TPO ist sie Absicht,
+  // anders als beim Volumenprofil.
+  const pxProPunkt = y(0) - y(1);
+  const bandH = (tp.step || ((tp.hi - tp.lo) / (tp.bins_n || 180))) * pxProPunkt;
+  const rowH = Math.max(1.2, bandH * 0.82);
 
   // Eigene Spalte: ein dunkler Grund, damit die Bloecke gegen ihn
   // zaehlbar sind und nicht gegen die Kerzen dahinter.
@@ -848,14 +996,90 @@ function heat(t){
           Math.round(a[2]+(b[2]-a[2])*k)];
 }
 
-function drawProfile(ctx, y, pw, ph, topPad, V, loP, hiP){
-  const vp = S.data.vp;
-  const maxW = Math.min(pw*0.19, 74);
-  // Keine Untergrenze mehr: bei 1000 Baendern erzwang die alte Klemme
-  // von 1,1 Pixel eine Gesamthoehe von 1100 Pixeln auf 600 verfuegbaren.
-  const rowH = ph / (vp.bins_n || 1000);
+/** Der Profilstreifen in seinem eigenen Raster: eine Bildzeile je Band.
+
+    Gemerkt, solange Profil, Farbwahl und Breite dieselben bleiben - also
+    ueber jede Geste hinweg und bis zum naechsten Nachladen. */
+let _vpCache = {vp:null, k:"", c:null};
+function profilStreifen(vp, maxW, hZiel){
+  const nB = vp.bins_n || (vp.w||[]).length;
+  const W_ = vp.w || [];
+  if(!nB || !W_.length) return null;
+  // Der Streifen wird mindestens so hoch gezeichnet, wie er am Ende auf
+  // dem Schirm steht. Sonst vergroessert die Leinwand beim Kopieren, und
+  // Vergroessern heisst Verwischen: 1000 Zeilen auf 2100 Geraetepixel
+  // gezogen ergaben einen weichen Verlauf statt abzaehlbarer Baender -
+  // und die Feinheit ist bei einem Profil der ganze Punkt. Verkleinern
+  // ist dagegen genau richtig, es mischt.
+  //
+  // Auf 32 Zeilen gerundet, damit nicht bei jedem Bildpunkt neu
+  // gezeichnet wird - und trotzdem nah genug an 1:1, dass die Glaettung
+  // beim Kopieren fast nichts zu tun hat. Gemessen an der Feinheit der
+  // Baender: eine Zweierpotenz als Raster verfehlte die Zielhoehe um bis
+  // zu ein Drittel, und genau dieses Verhaeltnis verwischte sie.
+  //
+  // Ist der Streifen am Ende KLEINER als seine Baender - weit
+  // herausgezoomt -, bleibt er bei 1000 Zeilen und die Leinwand
+  // verkleinert. Das ist hier das Richtige: Verkleinern mischt, und
+  // gerundet fielen sonst zwei Drittel der Zeilen auf dieselbe und aus
+  // 1000 Baendern wuerden sichtbar 600.
+  const hoehe = Math.min(8192, Math.max(nB, Math.ceil((hZiel||0)/32)*32));
+  const k = [S.profileMode, Math.round(maxW), S.layers.va, hoehe].join("|");
+  if(_vpCache.vp === vp && _vpCache.k === k) return _vpCache.c;
+
+  const CS = vp.cs || [];
+  const va0 = vp.va0 == null ? -1 : vp.va0, va1 = vp.va1 == null ? -2 : vp.va1;
   const gold = [224,169,60], violet = [169,123,232], flat = [91,106,125];
   const cream = [207,198,178], slate = [91,106,125];
+  const c = document.createElement("canvas");
+  // Breite in Geraetepixeln, damit die Balkenenden beim Kopieren nicht
+  // schon im Streifen verwaschen sind. Hoehe: genau ein Punkt je Band.
+  const bw2 = Math.max(1, Math.round(maxW*dpr));
+  c.width = bw2; c.height = hoehe;
+  const rh = hoehe / nB;
+  // Winziger Ueberstand, damit zwischen zwei Zeilen keine Haarlinie
+  // durchscheint, wo die Kantenglaettung beide zur Haelfte deckt.
+  const ueber = rh*0.25;
+  const g = c.getContext("2d");
+  for(let i=0;i<nB;i++){
+    const w = W_[i]|0;
+    if(w <= 4) continue;
+    const inVA = i >= va0 && i <= va1;
+    let rgb, alpha;
+    if(S.profileMode === "heat"){
+      // Value Area in Creme bis Weiss, ausserhalb gedaempftes
+      // Schiefergrau. Die Staerke steckt schon in der Balkenlaenge - die
+      // Farbe muss sie nicht ein zweites Mal erzaehlen und traegt
+      // stattdessen die Frage, die man beim Blick auf ein Volumenprofil
+      // zuerst stellt: liegt dieser Preis drinnen oder draussen.
+      const t = w/1000;
+      rgb = inVA ? cream.map(x=> Math.round(x + (255-x)*t*0.55)) : slate;
+      alpha = inVA ? 0.58 + 0.40*t : 0.26 + 0.30*t;
+    } else {
+      // Rollenfarben: Faerbung nach gehandelter Optionsseite. Die
+      // Empfindlichkeit ist auf 25 Prozentpunkte um die Mitte gestellt,
+      // nicht auf die vollen 0 bis 100. Gemessen schwankt der
+      // Call-Anteil je Band real zwischen 31 und 59 Prozent - gegen die
+      // volle Skala gerechnet blieb ein Farbausschlag von einem Drittel
+      // uebrig und das ganze Profil sah einheitlich grau aus.
+      const t = Math.max(-1, Math.min(1, ((CS[i]==null?50:CS[i]) - 50)/25));
+      const to = t >= 0 ? gold : violet, kk = Math.abs(t);
+      rgb = flat.map((f,j)=> Math.round(f + (to[j]-f)*kk));
+      alpha = inVA ? 0.50 : 0.24;
+    }
+    g.fillStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})`;
+    // Band 0 liegt beim TIEFSTEN Preis, die Bildzeile 0 aber oben -
+    // also von unten nach oben fuellen. Andersherum stuende das Profil
+    // auf dem Kopf und der POC laege am falschen Ende.
+    g.fillRect(0, (nB-1-i)*rh, bw2*w/1000, rh+ueber);
+  }
+  _vpCache = {vp, k, c};
+  return c;
+}
+
+function drawProfile(ctx, y, pw, ph, topPad, V){
+  const vp = S.data.vp;
+  const maxW = Math.min(pw*0.19, 74);
 
   // Value Area ueber die ganze Chartbreite, nicht nur hinter dem Profil.
   // Sie ist eine Aussage ueber den Kursbereich, nicht ueber den Streifen:
@@ -884,59 +1108,31 @@ function drawProfile(ctx, y, pw, ph, topPad, V, loP, hiP){
     ctx.globalAlpha=1; ctx.textAlign="left";
   }
 
-  // Baender zeichnen. Bei 1000 Baendern ist eine Zeile auf dem Telefon
-  // etwa 0,6 CSS-Pixel hoch, auf einem 3x-Display also knapp zwei
-  // Geraetepixel. Deshalb hier KEIN Runden auf ganze Pixel: gerundet
-  // fielen fast zwei Drittel der Zeilen auf dieselbe Bildzeile und
-  // ueberschrieben einander, aus 1000 Baendern wurden sichtbar 600.
-  // Ungerundet mischt die Leinwand die Zeilen korrekt - das ist keine
-  // Unschaerfe, sondern die richtige Verkleinerung.
-  const W_ = vp.w || [], CS = vp.cs || [], nB = vp.bins_n || W_.length;
-  const bLo = vp.lo, bStep = vp.step;
-  const va0 = vp.va0 == null ? -1 : vp.va0, va1 = vp.va1 == null ? -2 : vp.va1;
-  // Nur die sichtbaren Baender durchlaufen. Der Preis ist linear im
-  // Index, also laesst sich der sichtbare Ausschnitt direkt ausrechnen,
-  // statt 1000 mal zu pruefen und zu verwerfen.
-  let i0 = Math.floor((loP - bLo)/bStep) - 1;
-  let i1 = Math.ceil((hiP - bLo)/bStep) + 1;
-  i0 = Math.max(0, i0); i1 = Math.min(nB-1, i1);
-  // Winziger Ueberstand, damit zwischen zwei Zeilen keine Haarlinie
-  // durchscheint, wo die Kantenglaettung beide zur Haelfte deckt.
-  const over = 0.5/dpr;
-  for(let i=i0;i<=i1;i++){
-    const w = W_[i]|0;
-    if(w <= 4) continue;
-    const yy = y(bLo + (i+0.5)*bStep);
-    const inVA = i >= va0 && i <= va1;
-    let rgb, alpha;
-    if(S.profileMode === "heat"){
-      // Value Area in Creme bis Weiss, ausserhalb gedaempftes
-      // Schiefergrau. Die Staerke steckt schon in der Balkenlaenge -
-      // die Farbe muss sie nicht ein zweites Mal erzaehlen und traegt
-      // stattdessen die Frage, die man beim Blick auf ein
-      // Volumenprofil zuerst stellt: liegt dieser Preis drinnen oder
-      // draussen. Die Helligkeit staffelt innerhalb beider Bereiche
-      // noch nach Gewicht, damit die Struktur nicht flach wird.
-      const t = w/1000;
-      rgb = inVA ? cream.map((c,j)=> Math.round(c + (255-c)*t*0.55))
-                 : slate;
-      alpha = inVA ? 0.58 + 0.40*t : 0.26 + 0.30*t;
-    } else {
-      // Rollenfarben: Faerbung nach gehandelter Optionsseite.
-      // Die Empfindlichkeit ist auf 25 Prozentpunkte um die Mitte
-      // gestellt, nicht auf die vollen 0 bis 100. Gemessen schwankt der
-      // Call-Anteil je Band real zwischen 31 und 59 Prozent - gegen die
-      // volle Skala gerechnet blieb davon ein Farbausschlag von einem
-      // Drittel uebrig und das ganze Profil sah einheitlich grau aus.
-      // 25 Prozent Call gegen 75 Prozent Call ist ein klarer Befund und
-      // darf die Farbe ausreizen.
-      const t = Math.max(-1, Math.min(1, ((CS[i]==null?50:CS[i]) - 50)/25));
-      const to = t >= 0 ? gold : violet, k = Math.abs(t);
-      rgb = flat.map((f,j)=> Math.round(f + (to[j]-f)*k));
-      alpha = inVA ? 0.50 : 0.24;
+  // Baender: einmal gezeichnet, danach kopiert.
+  //
+  // Bei 1000 Baendern waren das 1000 Fuellbefehle JE BILD, dazu je Band
+  // zwei Feldabbildungen und ein zusammengesetzter Farbtext. Gemessen
+  // kostete das Profil allein 9,6 der 23 Millisekunden eines Bildes -
+  // und es aenderte sich dabei nie: die Baender haengen am Profil und an
+  // der Farbwahl, nicht am Ausschnitt.
+  //
+  // Deshalb wird der Streifen in seinem EIGENEN Raster vorgezeichnet -
+  // ein Bildpunkt Hoehe je Band, also 1000 Zeilen - und danach als ein
+  // einziges Bild auf die Preisskala gedehnt. Weil Preis und Bandindex
+  // linear zusammenhaengen, ist das genau dieselbe Abbildung wie vorher,
+  // nur in einem Befehl statt in tausend. Die Glaettung der Leinwand
+  // mischt beim Verkleinern die Zeilen - was der frueher handgerechnete
+  // Ueberstand erzwingen sollte, macht sie von sich aus richtig.
+  const yTop = y(vp.lo + vp.step*(vp.bins_n || 1000));
+  const yBot = y(vp.lo);
+  const streifen = profilStreifen(vp, maxW, Math.round((yBot-yTop)*dpr));
+  if(streifen){
+    if(yBot > yTop){
+      ctx.save();
+      ctx.beginPath(); ctx.rect(0, topPad, pw, ph); ctx.clip();
+      ctx.drawImage(streifen, 0, yTop, maxW, yBot - yTop);
+      ctx.restore();
     }
-    ctx.fillStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})`;
-    ctx.fillRect(0, yy - rowH/2, maxW*w/1000, rowH + over);
   }
 
   // POC: die Zeile, an der am meisten umging
@@ -1000,6 +1196,80 @@ function orbSprite(color, r){
   return sp;
 }
 
+/** Alles, was an Waenden und Spuren haengt und nicht am Ausschnitt.
+
+    Diese Rechnung lief bisher in jedem Bild: zwei Karten aufbauen, ueber
+    alle Stuetzstellen laufen, eine Liste sortieren. Waehrend eines Wischs
+    also sechzig mal je Sekunde - fuer ein Ergebnis, das sich nur aendert,
+    wenn neue Spurdaten eintreffen. Das ist einmal je Nachladen.
+
+    Staerke einer Wand als NOMINAL, nicht als Kontraktzahl.
+
+    Die Helligkeit vergleicht Waende ueber Ketten hinweg, und Kontrakte
+    sind nicht ueberall gleich gross: ein NDX-Kontrakt laeuft auf 100
+    Indexpunkte, ein QQQ-Kontrakt auf 100 Anteile - das 41-fache je
+    Stueck. Gegen ein gemeinsames Maximum aus Kontraktzahlen gerechnet
+    erschien die staerkste NDX-Wand mit 3.511 Kontrakten neben QQQ mit
+    235.246 bei 1,5 Prozent Helligkeit, also gar nicht. Sie war da, nur
+    unsichtbar. In Nominal sind es 10,6 gegen 20,1 Mrd - Faktor 1,9
+    statt 78. Und das ist auch die richtige Groesse: eine Wand wirkt,
+    weil der Dealer dagegen absichern muss, und wieviel er kaufen oder
+    verkaufen muss, haengt am Geld, nicht an der Zahl der Tickets.
+
+    PULS: was in DIESEN zwei Minuten am Strike geschah.
+
+    Das Band war bisher ueber den ganzen Tag gleich hell, und das war
+    kein Darstellungsfehler, sondern eine Folge der Datenlage: moduliert
+    wurde mit dem Open Interest, und der steht waehrend der Sitzung
+    still - die OCC rechnet ihn ueber Nacht. Gemessen an einem 0DTE-Call
+    mit 731 Kontrakten Tagesumsatz und Open Interest null ist das kein
+    Zweifelsfall. Ein Band aus OI KANN nicht atmen.
+
+    Das gehandelte Volumen laeuft dagegen live mit. Es ist ueber den Tag
+    kumuliert, also sagt erst die DIFFERENZ zweier Stuetzstellen, was
+    gerade passiert. Die Groessenordnung rechtfertigt den Aufwand: im
+    Band um den Kurs wurden heute 76.858 Kontrakte gehandelt gegen
+    39.136 stehendes OI - 196 Prozent Umschlag.
+
+    Bezug ist das 95. Perzentil, nicht das Maximum - dieselbe Lehre wie
+    beim Volumenprofil. Gemessen: ein einzelner Sprung von 161.995 gegen
+    einen Median von 29. Gegen dieses Maximum normiert waere jeder echte
+    Schub auf zwei Promille Helligkeit gefallen. */
+const nomWand = (oi, strike) => oi * 100 * (strike || 1);
+let _orbCache = {w:null, t:null, v:null};
+function orbVorberechnung(walls, tracks){
+  if(_orbCache.w === walls && _orbCache.t === tracks) return _orbCache.v;
+  const rec = new Map(), puls = new Map(), alle = [];
+  let peak = 0;
+  tracks.forEach(tk=>{
+    const pts = tk.points;
+    for(let i=0;i<pts.length;i++){
+      const q = pts[i];
+      rec.set(`${tk.chain}|${tk.side}|${tk.strike}|${q.t}`, q);
+      const n = nomWand(q.oi, tk.strike);
+      if(n > peak) peak = n;
+      // Nur Zuwachs zaehlt. Faellt der kumulierte Wert (neuer Tag,
+      // Neustart der Bruecke), ist das kein Handel, sondern ein
+      // Zaehlerwechsel - und der darf nicht als Ausbruch aufleuchten.
+      const vPrev = i ? (pts[i-1].v || 0) : (q.v || 0);
+      const dv = Math.max(0, (q.v || 0) - vPrev);
+      puls.set(`${tk.chain}|${tk.side}|${tk.strike}|${q.t}`, dv);
+      if(dv > 0) alle.push(dv);
+    }
+  });
+  walls.forEach(w=>{ const n = nomWand(w.oi, w.strike); if(n > peak) peak = n; });
+  let v = null;
+  if(peak > 0){
+    alle.sort((a,b)=>a-b);
+    const pulsPeak = alle.length
+      ? Math.max(alle[Math.min(alle.length-1, Math.floor(alle.length*0.95))], 1)
+      : 0;
+    v = {rec, puls, peak, pulsPeak};
+  }
+  _orbCache = {w:walls, t:tracks, v};
+  return v;
+}
+
 /** Wand-Verlauf als Orb-Ketten: x = Zeit, y = Preis, Radius = Bestand.
     Eine Linie sagt, wo die Wand liegt. Die Kette sagt zusaetzlich, ob
     sie waechst oder zerfaellt. */
@@ -1015,7 +1285,7 @@ function orbSprite(color, r){
     Und es ist die Bewegung, die zaehlt. Dass das Zero-Gamma 58 Punkte
     entfernt steht, ist eine Zahl; dass es dem Kurs seit einer Stunde
     entgegenkommt, ist eine Aussage. */
-function drawPaths(ctx, bars, y, bw, pw, ph, V, topPad){
+function drawPaths(ctx, bars, y, xT, pw, ph, V, topPad){
   const paths = S.trails?.paths;
   if(!paths || !bars.length) return;
   const t0 = bars[0].t, t1 = bars[bars.length-1].t;
@@ -1037,7 +1307,7 @@ function drawPaths(ctx, bars, y, bw, pw, ph, V, topPad){
     ctx.beginPath();
     let auf = false;
     seg.forEach(q=>{
-      const x = tToX(q.t, bars, bw), yy = y(q.p);
+      const x = xT(q.t), yy = y(q.p);
       if(yy < topPad-40 || yy > topPad+ph+40){ auf = false; return; }
       if(!auf){ ctx.moveTo(x, yy); auf = true; } else ctx.lineTo(x, yy);
     });
@@ -1047,14 +1317,88 @@ function drawPaths(ctx, bars, y, bw, pw, ph, V, topPad){
     const last = seg[seg.length-1], ly = y(last.p);
     if(ly >= topPad-2 && ly <= topPad+ph+2){
       ctx.globalAlpha = .9; ctx.fillStyle = V(st.c);
-      ctx.beginPath(); ctx.arc(tToX(last.t, bars, bw), ly, 2.1, 0, 6.2832); ctx.fill();
+      ctx.beginPath(); ctx.arc(xT(last.t), ly, 2.1, 0, 6.2832); ctx.fill();
     }
     ctx.globalAlpha = 1;
   });
   ctx.restore();
 }
 
-function drawOrbs(ctx, bars, y, bw, pw, ph, V, topPad){
+/** Die Gamma-Kurve: Netto-Gamma ueber den Preis, quer gelegt.
+
+    Diese Funktion gab es nicht. Der Schalter "Gamma-Kurve" stand seit
+    jeher im Menue der Ebenen und rief sie auf - wer ihn umlegte, bekam
+    keinen Fehlerhinweis, sondern einen schwarzen Chart: der Aufruf brach
+    draw() ab, bevor eine einzige Kerze gezeichnet war, und blieb
+    abgebrochen, weil der Schalter gesetzt blieb.
+
+    Gelesen wird sie wie ein Profil, nur dass nicht Volumen nach rechts
+    steht, sondern Gamma - und zwar mit Vorzeichen. Gold heisst positiv:
+    dort daempfen die Absicherungen der Haendler die Bewegung. Violett
+    heisst negativ: dort verstaerken sie sie. Der Punkt dazwischen ist
+    das Zero-Gamma, und er ist der Grund fuer die ganze Darstellung -
+    eine Zahl sagt, wo es liegt, die Kurve sagt, wie steil der Uebergang
+    ist. Ein flacher Durchgang ist eine Grenze, die nichts kostet; ein
+    steiler ist eine Wand. */
+function drawGammaCurve(ctx, y, pw, ph, V, lo, hi, topPad){
+  const c = S.data?.curve;
+  if(!Array.isArray(c) || c.length < 3) return;
+  let m = 0;
+  for(const q of c){ const a = Math.abs(q.gex || 0); if(a > m) m = a; }
+  if(!(m > 0)) return;
+
+  // Rechte Haelfte der Flaeche: links steht das Volumenprofil.
+  const x0 = pw*0.68, amp = pw*0.20;
+  const gx = g => x0 + (Math.max(-1, Math.min(1, g/m))) * amp;
+
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, topPad, pw, ph); ctx.clip();
+
+  // Nulllinie. Ohne sie ist die Kurve eine Schlangenlinie ohne Bezug.
+  ctx.strokeStyle=V("--ink-faint"); ctx.globalAlpha=.4; ctx.lineWidth=1;
+  ctx.setLineDash([2,4]);
+  const zx=snap(x0)+half();
+  ctx.beginPath(); ctx.moveTo(zx,topPad); ctx.lineTo(zx,topPad+ph); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Abschnittweise fuellen statt in einem Zug: so faerbt sich jeder
+  // Abschnitt nach seinem eigenen Vorzeichen und der Wechsel braucht
+  // keine Sonderbehandlung.
+  for(let i=0;i<c.length-1;i++){
+    const a=c[i], b=c[i+1];
+    const ya=y(a.s), yb=y(b.s);
+    if((ya<topPad-30&&yb<topPad-30)||(ya>topPad+ph+30&&yb>topPad+ph+30)) continue;
+    ctx.fillStyle = ((a.gex||0)+(b.gex||0))/2 >= 0 ? V("--resist") : V("--support");
+    ctx.globalAlpha=.12;
+    ctx.beginPath();
+    ctx.moveTo(x0,ya); ctx.lineTo(gx(a.gex||0),ya);
+    ctx.lineTo(gx(b.gex||0),yb); ctx.lineTo(x0,yb);
+    ctx.closePath(); ctx.fill();
+  }
+
+  ctx.globalAlpha=.7; ctx.lineWidth=1.2; ctx.strokeStyle=V("--pivot");
+  ctx.beginPath();
+  c.forEach((q,i)=>{ const xx=gx(q.gex||0), yy=y(q.s);
+    i ? ctx.lineTo(xx,yy) : ctx.moveTo(xx,yy); });
+  ctx.stroke();
+
+  // Jeder Vorzeichenwechsel bekommt seinen Punkt. In der Regel ist es
+  // einer; sind es mehrere, ist genau das die Aussage.
+  for(let i=0;i<c.length-1;i++){
+    const ga=c[i].gex||0, gb=c[i+1].gex||0;
+    if((ga>=0) === (gb>=0)) continue;
+    const t=Math.abs(ga)/(Math.abs(ga)+Math.abs(gb) || 1);
+    const yy=y(c[i].s + (c[i+1].s - c[i].s)*t);
+    if(yy<topPad||yy>topPad+ph) continue;
+    ctx.globalAlpha=1; ctx.fillStyle=V("--pivot");
+    ctx.beginPath(); ctx.arc(x0,yy,2.6,0,6.2832); ctx.fill();
+    ctx.font="8px "+V("--mono"); ctx.textAlign="left";
+    ctx.fillText("γ = 0", x0+7, yy-4);
+  }
+  ctx.globalAlpha=1; ctx.textAlign="left"; ctx.restore();
+}
+
+function drawOrbs(ctx, bars, y, xT, pw, ph, V, topPad){
   const walls = S.data?.leading_walls || [];
   const tr = S.trails;
   const tracks = (tr && tr.tracks) || [];
@@ -1064,81 +1408,11 @@ function drawOrbs(ctx, bars, y, bw, pw, ph, V, topPad){
   const bucket = (tr && tr.bucket) || 120;
   const t0 = bars[0].t, t1 = bars[bars.length-1].t;
 
-  // Staerke einer Wand als NOMINAL, nicht als Kontraktzahl.
-  //
-  // Die Helligkeit vergleicht Waende ueber Ketten hinweg, und Kontrakte
-  // sind nicht ueberall gleich gross: ein NDX-Kontrakt laeuft auf 100
-  // Indexpunkte, ein QQQ-Kontrakt auf 100 Anteile - das 41-fache je
-  // Stueck. Gegen ein gemeinsames Maximum aus Kontraktzahlen gerechnet
-  // erschien die staerkste NDX-Wand mit 3.511 Kontrakten neben QQQ mit
-  // 235.246 bei 1,5 Prozent Helligkeit, also gar nicht. Sie war da, nur
-  // unsichtbar.
-  //
-  // In Nominal sind es 10,6 gegen 20,1 Mrd - also Faktor 1,9 statt 78.
-  // Und das ist auch die richtige Groesse: eine Wand wirkt, weil der
-  // Dealer dagegen absichern muss, und wieviel er kaufen oder verkaufen
-  // muss, haengt am Geld, nicht an der Zahl der Tickets.
-  const nom = (oi, strike) => oi * 100 * (strike || 1);
-
-  const rec = new Map();
-  let peak = 0;
-  tracks.forEach(tk=>{
-    tk.points.forEach(q=>{
-      rec.set(`${tk.chain}|${tk.side}|${tk.strike}|${q.t}`, q);
-      const n = nom(q.oi, tk.strike);
-      if(n > peak) peak = n;
-    });
-  });
-  walls.forEach(w=>{ const n = nom(w.oi, w.strike); if(n > peak) peak = n; });
-  if(peak <= 0) return;
-
-  // PULS: was in DIESEN zwei Minuten am Strike geschah.
-  //
-  // Das Band war bisher ueber den ganzen Tag gleich hell, und das war
-  // kein Darstellungsfehler, sondern eine Folge der Datenlage: moduliert
-  // wurde mit dem Open Interest, und der steht waehrend der Sitzung
-  // still - die OCC rechnet ihn ueber Nacht. Gemessen an einem 0DTE-Call
-  // mit 731 Kontrakten Tagesumsatz und Open Interest null ist das kein
-  // Zweifelsfall. Ein Band, das aus OI gebaut ist, KANN nicht atmen.
-  //
-  // Das gehandelte Volumen laeuft dagegen live mit. Es ist ueber den Tag
-  // kumuliert, also sagt erst die DIFFERENZ zweier Stuetzstellen, was
-  // gerade passiert: ein Sprung heisst, dass an diesem Strike in diesem
-  // Zeitfenster gehandelt wurde. Genau das soll man sehen.
-  //
-  // Die Groessenordnung rechtfertigt den Aufwand: im Band um den Kurs
-  // wurden heute 76.858 Kontrakte gehandelt gegen 39.136 stehendes OI -
-  // 196 Prozent Umschlag. Das meiste Geschehen taucht in keinem OI je
-  // auf.
-  const puls = new Map();
-  const alle = [];
-  tracks.forEach(tk=>{
-    const pts = tk.points;
-    for(let i=0;i<pts.length;i++){
-      const vPrev = i ? (pts[i-1].v || 0) : (pts[i].v || 0);
-      // Nur Zuwachs zaehlt. Faellt der kumulierte Wert (neuer Tag,
-      // Neustart der Bruecke), ist das kein Handel, sondern ein
-      // Zaehlerwechsel - und der darf nicht als Ausbruch aufleuchten.
-      const dv = Math.max(0, (pts[i].v || 0) - vPrev);
-      puls.set(`${tk.chain}|${tk.side}|${tk.strike}|${pts[i].t}`, dv);
-      if(dv > 0) alle.push(dv);
-    }
-  });
-  // Bezug ist das 95. Perzentil, nicht das Maximum - dieselbe Lehre wie
-  // beim Volumenprofil. Gemessen: ein einzelner Sprung von 161.995 gegen
-  // einen Median von 29 (der Rekorder schrieb eine Reihe mit dem
-  // kumulierten Tagesvolumen fort). Gegen dieses Maximum normiert waere
-  // jeder echte Schub auf zwei Promille Helligkeit gefallen - das ganze
-  // Band waere wieder flach gewesen, diesmal aus dem umgekehrten Grund.
-  //
-  // Das oberste Prozent laeuft dafuer an den Anschlag. Bei einem
-  // Ausbruch ist das kein Verlust: dass er stattfand, sagt schon der
-  // Vollausschlag, und wie weit er das Perzentil uebertraf, ist fuer die
-  // Frage "hier passiert gerade etwas" ohne Belang.
-  alle.sort((a,b)=>a-b);
-  const pulsPeak = alle.length
-    ? Math.max(alle[Math.min(alle.length-1, Math.floor(alle.length*0.95))], 1)
-    : 0;
+  // Waende und Spuren aendern sich nur beim Nachladen - die Rechnung
+  // dazu steht in orbVorberechnung() und wird gemerkt.
+  const vor = orbVorberechnung(walls, tracks);
+  if(!vor) return;
+  const {rec, puls, peak, pulsPeak} = vor;
 
   // Schrittweite: nie enger als fuenfeinhalb Bildpunkte. Bei vier lagen
   // die Perlen in ruhigen Abschnitten so dicht, dass sie trotz Luecke zu
@@ -1156,14 +1430,14 @@ function drawOrbs(ctx, bars, y, bw, pw, ph, V, topPad){
     const key = `${w.chain}|${w.side}|${w.strike}`;
 
     for(let t = t0; t <= t1 + bucket; t += step){
-      const x = tToX(t, bars, bw);
+      const x = xT(t);
       if(x < -8 || x > pw + 8) continue;
       // Gemessen oder angenommen? Ein aufgezeichneter Wert schlaegt den
       // aktuellen Bestand, sonst gilt der aktuelle als Annahme.
       const slot = t - (t % bucket);
       const measured = rec.get(`${key}|${slot}`);
       const oi = measured ? measured.oi : w.oi;
-      const rel = Math.min(1, nom(oi, w.strike) / peak);
+      const rel = Math.min(1, nomWand(oi, w.strike) / peak);
 
       // Der Puls dieses Zeitfensters. Wurzel statt linear, damit auch
       // maessiger Handel sichtbar wird und nicht nur der eine Ausreisser
@@ -1201,23 +1475,48 @@ function drawOrbs(ctx, bars, y, bw, pw, ph, V, topPad){
 }
 
 function draw(){
-  const V=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const V=n=>TH[n]||"";
   ctx.clearRect(0,0,W,H);
-  // Grund mit leichtem Verlauf statt Flaeche - die Kerzen stehen dadurch
-  // freier, ohne dass eine zweite Farbe ins Spiel kommt
-  const bg = ctx.createLinearGradient(0,0,0,H);
-  bg.addColorStop(0, V("--panel")); bg.addColorStop(0.55, V("--ground"));
-  bg.addColorStop(1, V("--ground"));
-  ctx.fillStyle = bg; ctx.fillRect(0,0,W,H);
-  const bars=vbars();
-  if(!bars.length){
+  const alle=S.data?.bars||[];
+  if(!alle.length){
     ctx.fillStyle=V("--ink-faint"); ctx.font="13px "+V("--sans"); ctx.textAlign="center";
     ctx.fillText("keine Kursdaten", W/2, H/2); return;
   }
   const topPad = PAD.t + (S.immersive ? 6 : CHROME*0.42);
   const pw=W-PAD.r, ph=H-PAD.b-topPad;
-  let lo=Math.min(...bars.map(b=>b.l)), hi=Math.max(...bars.map(b=>b.h));
-  const lv=chartLevels(), range=(hi-lo)||1;
+  // Grund mit leichtem Verlauf statt Flaeche - die Kerzen stehen dadurch
+  // freier, ohne dass eine zweite Farbe ins Spiel kommt. Gebacken.
+  const HG = hintergrund(topPad, pw, ph);
+  ctx.drawImage(HG.grund, 0, 0, W, H);
+
+  // Der Ausschnitt ist ein Bruch, und er wird auch als Bruch gezeichnet.
+  //
+  // Vorher schnitt vbars() die sichtbaren Balken heraus und die Breite
+  // ergab sich aus ihrer ANZAHL. Damit war jede Zwischenstellung
+  // verloren: ein Wisch von 120 Bildpunkten erzeugte gemessen 25
+  // verschiedene Bilder statt eines je Bildaufbau - der Chart sprang in
+  // Stufen von einem Balken, statt dem Finger zu folgen. Und weil die
+  // Anzahl zwischen 71 und 72 wechselte, aenderte sich bei jedem Sprung
+  // zugleich die Balkenbreite und alles zuckte.
+  //
+  // Jetzt bestimmt die SPANNE die Breite, und die Lage jedes Balkens
+  // haengt an seinem absoluten Index. i0 darf beliebig krumm sein.
+  const vw = S.vw || {i0:0, i1:alle.length};
+  const sp = Math.max(1e-6, vw.i1 - vw.i0);
+  const bw = pw / sp;
+  const X  = i => (i - vw.i0 + 0.5) * bw;        // Mitte von Balken i
+  const iL = Math.max(0, Math.floor(vw.i0) - 1);
+  const iR = Math.min(alle.length - 1, Math.ceil(vw.i1) + 1);
+  const bars = alle.slice(iL, iR + 1);
+  if(!bars.length) return;
+  const xT = ts => X(tToI(ts, alle));
+
+  let lo=Infinity, hi=-Infinity;
+  for(let i=0;i<bars.length;i++){
+    if(bars[i].l < lo) lo = bars[i].l;
+    if(bars[i].h > hi) hi = bars[i].h;
+  }
+  const lv=chartLevelsCached(), range=(hi-lo)||1;
   const slack = S.fitAll ? Infinity : range*0.45;
   const loL=lo-slack, hiL=hi+slack;
   const barLo=lo, barHi=hi, barRange=(barHi-barLo)||1;
@@ -1263,11 +1562,44 @@ function draw(){
     lo = c - half; hi = c + half;
   }
   const pd=(hi-lo)*0.06||1; lo-=pd; hi+=pd;
-  const y=p=>topPad+(hi-p)/(hi-lo)*ph, bw=pw/bars.length;
 
-  if(S.layers.profil && S.data.vp?.w) drawProfile(ctx, y, pw, ph, topPad, V, lo, hi);
+  // Was die Automatik ergeben haette, bleibt gemerkt. Greift der Finger
+  // an die Skala, faengt sie genau hier an - ohne Sprung.
+  S.autoScale = {lo, hi};
+  // Von Hand gesetzt schlaegt automatisch. Sonst waere jede Bewegung an
+  // der Preisachse im naechsten Bild wieder weggerechnet.
+  if(S.vs){
+    lo = S.vs.lo; hi = S.vs.hi;
+    if(!(hi > lo)){ S.vs = null; lo = S.autoScale.lo; hi = S.autoScale.hi; }
+  }
+  const y=p=>topPad+(hi-p)/(hi-lo)*ph;
+  const pAt=yy=>hi-(yy-topPad)/ph*(hi-lo);   // Umkehrung, fuer die Gesten
+  S.geo = {topPad, ph, pw, bw, lo, hi, y, pAt};
+
+  // Preisleiter. Die Marken der Level sagen, WO etwas liegt; erst die
+  // Leiter sagt, WIEVIEL dazwischen liegt. Ohne sie war der rechte Rand
+  // eine Sammlung von Schildern ohne Massstab.
+  //
+  // Gerechnet wird in Brokerpreisen, nicht in Indexpreisen: runde Zahlen
+  // sind nur dort rund, wo sie auch gelesen werden. Um einen Versatz von
+  // 69 Punkten verschoben waere aus 29.200 sonst 29.269 geworden - eine
+  // Leiter aus krummen Zahlen.
+  const off = S.off || 0;
+  const tick = niceStep((hi-lo), Math.max(3, Math.min(9, Math.round(ph/54))));
+  const t0T = Math.ceil((lo+off)/tick)*tick, t1T = (hi+off);
+  const dez = tick < 1 ? Math.min(4, Math.ceil(-Math.log10(tick))) : 0;
+  ctx.strokeStyle=V("--line-soft"); ctx.lineWidth=1; ctx.globalAlpha=.55;
+  ctx.beginPath();
+  for(let p=t0T; p<=t1T; p+=tick){
+    const yy=snap(y(p-off))+half();
+    if(yy<topPad||yy>topPad+ph) continue;
+    ctx.moveTo(0,yy); ctx.lineTo(pw,yy);
+  }
+  ctx.stroke(); ctx.globalAlpha=1;
+
+  if(S.layers.profil && S.data.vp?.w) drawProfile(ctx, y, pw, ph, topPad, V);
   if(S.layers.tpo) drawTPO(ctx, y, pw, ph, topPad, V);
-  if(S.layers.orbs) drawPaths(ctx, bars, y, bw, pw, ph, V, topPad);
+  if(S.layers.orbs) drawPaths(ctx, bars, y, xT, pw, ph, V, topPad);
   if(S.layers.zonen) (S.data.zones||[]).forEach(z=>{
     const y1=y(z.top),y2=y(z.bot);
     const c = z.role==="resist"?"224,169,60" : z.role==="support"?"169,123,232" : "207,198,178";
@@ -1275,11 +1607,29 @@ function draw(){
   });
 
   if(S.layers.gcurve) drawGammaCurve(ctx, y, pw, ph, V, lo, hi, topPad);
-  if(S.layers.orbs) drawOrbs(ctx, bars, y, bw, pw, ph, V, topPad);
+  if(S.layers.orbs) drawOrbs(ctx, bars, y, xT, pw, ph, V, topPad);
 
   const upC=V("--up"), dnC=V("--down");
-  bars.forEach((b,i)=>{
-    const x=i*bw, cw=Math.max(1.3,bw*0.6), up=b.c>=b.o;
+  // Ein createLinearGradient JE KERZE waren bei 389 Kerzen 389 neue
+  // Verlaufsobjekte in jedem Bild. Der Verlauf laeuft waagerecht ueber
+  // die Koerperbreite und die ist fuer alle Kerzen gleich - also einmal
+  // bauen, bei 0 beginnend, und den Koerper darunter schieben.
+  // ... und nur, solange ein Koerper ueberhaupt breit genug ist, dass
+  // man einen Verlauf darin sehen kann. Bei fuenf Bildpunkten Abstand
+  // ist der Koerper drei Punkte breit - darin ist ein Verlauf keine
+  // Plastizitaet, sondern ein Rechenposten. Das Sichern und
+  // Zuruecksetzen des Zustands je Kerze schlug mit 9 Prozent der
+  // Bildzeit zu Buche, fuer etwas Unsichtbares.
+  const cwG = Math.max(1.3, (pw/sp)*0.6);
+  const breit = cwG >= 6;
+  const koerperG = col => {
+    const g = ctx.createLinearGradient(0,0,cwG,0);
+    g.addColorStop(0, col); g.addColorStop(1, col+"CC");
+    return g;
+  };
+  const gUp = breit?koerperG(upC):null, gDn = breit?koerperG(dnC):null;
+  bars.forEach((b,k)=>{
+    const x=X(iL+k)-bw/2, cw=Math.max(1.3,bw*0.6), up=b.c>=b.o;
     const col = up?upC:dnC;
     // Docht auf das Geraetepixel rasten, sonst franst eine 1px-Linie aus
     const wx = snap(x+bw/2)+half();
@@ -1289,13 +1639,45 @@ function draw(){
     const h=Math.max(1/dpr, bo-t), bx=snap(x+(bw-cw)/2);
     // Leichter Verlauf im Koerper: gibt der Kerze Volumen, ohne dass die
     // Farbe ihre Bedeutung verliert
-    if(h > 3){
-      const g=ctx.createLinearGradient(bx,t,bx+cw,t);
-      g.addColorStop(0, col); g.addColorStop(1, col+"CC");
-      ctx.fillStyle=g;
-    } else ctx.fillStyle=col;
-    ctx.fillRect(bx, t, cw, h);
+    if(h > 3 && breit){
+      ctx.save(); ctx.translate(bx, 0);
+      ctx.fillStyle = up?gUp:gDn; ctx.fillRect(0, t, cw, h);
+      ctx.restore();
+    } else { ctx.fillStyle=col; ctx.fillRect(bx, t, cw, h); }
   });
+
+  // Die Achse selbst: Trennstrich und Zahlen. Nach den Kerzen gezeichnet,
+  // damit kein Docht hineinragt, und vor den Level-Schildern, damit diese
+  // eine Zahl verdecken duerfen statt umgekehrt.
+  ctx.fillStyle=V("--ground"); ctx.globalAlpha=.72;
+  ctx.fillRect(pw, topPad-PAD.t, PAD.r, ph+PAD.t+PAD.b);
+  ctx.globalAlpha=1;
+  ctx.strokeStyle=V("--line"); ctx.lineWidth=1; ctx.globalAlpha=.7;
+  const axX=snap(pw)+half();
+  ctx.beginPath(); ctx.moveTo(axX,topPad-PAD.t); ctx.lineTo(axX,topPad+ph); ctx.stroke();
+  ctx.globalAlpha=1;
+  ctx.fillStyle=V("--ink-faint"); ctx.font="9px "+V("--mono"); ctx.textAlign="left";
+  for(let p=t0T; p<=t1T; p+=tick){
+    const yy=y(p-off);
+    if(yy<topPad+6||yy>topPad+ph-4) continue;
+    ctx.strokeStyle=V("--line"); ctx.globalAlpha=.8;
+    ctx.beginPath(); ctx.moveTo(axX,snap(yy)+half()); ctx.lineTo(axX+3,snap(yy)+half()); ctx.stroke();
+    ctx.globalAlpha=1;
+    ctx.fillText(fmt(p, dez), pw+6, yy+3);
+  }
+
+  // Steht die Skala von Hand, sagt das ein Schalter am Fuss der Achse.
+  // Eine Ansicht, aus der man nicht zurueckfindet, ist eine Falle.
+  S.autoBtn = null;
+  if(S.vs){
+    const bw2=PAD.r-6, bh=13, bx=pw+3, by=topPad+ph-bh-2;
+    ctx.fillStyle=V("--pivot"); ctx.globalAlpha=.9;
+    ctx.fillRect(bx, by, bw2, bh); ctx.globalAlpha=1;
+    ctx.fillStyle=V("--ground"); ctx.font="600 8.5px "+V("--mono"); ctx.textAlign="center";
+    ctx.fillText("AUTO", bx+bw2/2, by+9);
+    ctx.textAlign="left";
+    S.autoBtn = {x:bx, y:by, w:bw2, h:bh};
+  }
 
   const used=[], usedBox=[];
   lv.sort((a,b)=>a.p-b.p).forEach(l=>{
@@ -1319,9 +1701,9 @@ function draw(){
     // oben, Preis darunter, direkt am Level statt nur an der Skala.
     if(l.lab && S.layers.gpbox){
       ctx.font="7.5px "+V("--mono");
-      const w1=ctx.measureText(l.lab).width;
+      const w1=textW(ctx, l.lab);
       ctx.font="600 9px "+V("--mono");
-      const w2=ctx.measureText(px(l.p)).width;
+      const w2=textW(ctx, px(l.p));
       // Rechts neben dem Profil absetzen, nicht darauf - im Desktop
       // stehen die Kaesten ebenfalls frei.
       const profW = S.layers.profil ? Math.min(pw*0.19, 74) + 8 : 6;
@@ -1373,7 +1755,7 @@ function draw(){
         const c=V(l.c);
         const yy = dir>0 ? topPad+7+i*13 : topPad+ph-7-i*13;
         const txt = (dir>0?"▲ ":"▼ ")+px(l.p);
-        const w = ctx.measureText(txt).width+9;
+        const w = textW(ctx, txt)+9;
         ctx.globalAlpha=.92; ctx.fillStyle=c;
         ctx.fillRect(pw-w-3, yy-6, w, 12);
         ctx.globalAlpha=1; ctx.fillStyle=V("--ground"); ctx.textAlign="left";
@@ -1400,8 +1782,8 @@ function draw(){
     }
   }
   if(S.cross!=null){
-    const i=Math.max(0,Math.min(bars.length-1,S.cross));
-    const b=bars[i], x=i*bw+bw/2;
+    const i=Math.max(0,Math.min(alle.length-1,Math.round(S.cross)));
+    const b=alle[i], x=X(i);
     ctx.strokeStyle=V("--ink-dim"); ctx.globalAlpha=.5; ctx.setLineDash([2,3]);
     ctx.beginPath(); ctx.moveTo(x,topPad); ctx.lineTo(x,topPad+ph); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(0,y(b.c)); ctx.lineTo(pw,y(b.c)); ctx.stroke();
@@ -1412,14 +1794,10 @@ function draw(){
   } else $("cross").className="cross";
 
   // Vignette: nimmt den Raendern Gewicht, damit die Mitte traegt
-  const vig = ctx.createRadialGradient(W*0.45, H*0.45, Math.min(W,H)*0.35,
-                                       W*0.45, H*0.45, Math.max(W,H)*0.78);
-  vig.addColorStop(0, "rgba(0,0,0,0)");
-  vig.addColorStop(1, "rgba(0,0,0,0.30)");
-  ctx.fillStyle = vig; ctx.fillRect(0,0,pw,topPad+ph);
+  ctx.drawImage(HG.vig, 0, 0, W, H);
 
   ctx.fillStyle=V("--ink-faint"); ctx.font="9px "+V("--mono");
-  const st=Math.max(1,Math.floor(bars.length/4));
+  const st=Math.max(1,Math.round(sp/4));
   // Beschriftung nach der tatsaechlichen Spanne, nicht nach dem Namen der
   // Zeitebene. Vorher entschied allein S.tf==="1d" ueber Datum oder
   // Uhrzeit - bei 573 Viertelstundenkerzen ueber sechs Tage stand damit
@@ -1437,8 +1815,12 @@ function draw(){
   // fuenf: bei knapp ueber fuenf Tagen fielen zwei der fuenf Marken auf
   // denselben Kalendertag und die Achse las sich "08.09. · 08.09.".
   // Solange die Uhrzeit die Marken noch trennt, gehoert sie dazu.
-  for(let i=0;i<bars.length;i+=st){
-    const d=new Date(bars[i].t*1000);
+  // Vielfache von st im ABSOLUTEN Index. Vorher zaehlte die Schleife vom
+  // Anfang des Ausschnitts, und der wandert beim Schieben - die
+  // Beschriftung sprang mit jedem hereinlaufenden Balken auf andere
+  // Zeitpunkte um. So bleibt eine Marke an ihrem Balken kleben.
+  for(let i=Math.ceil(iL/st)*st; i<=iR; i+=st){
+    const d=new Date(alle[i].t*1000);
     const lab = spanD > 300
       ? d.toLocaleDateString("de-DE", yOpt)
       : (S.tf==="1d" || spanD > 10)
@@ -1447,14 +1829,67 @@ function draw(){
         ? d.toLocaleDateString("de-DE", dOpt)+" "
           + d.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})
         : d.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"});
-    let x=i*bw+bw/2; ctx.textAlign="center";
+    let x=X(i); ctx.textAlign="center";
     if(x<24){x=2;ctx.textAlign="left";} else if(x>pw-24){x=pw-2;ctx.textAlign="right";}
     ctx.fillText(lab, x, H-PAD.b+13);
   }
   ctx.textAlign="left";
 }
 
-// Gesten
+// ======================= Gesten =======================
+/* ── Massstab und Lage ─────────────────────────────────────────────────
+
+   Drei Dinge lassen sich verstellen, und jedes hat seine Geste:
+
+     waagerecht wischen      Zeit schieben
+     senkrecht wischen       Preis schieben
+     zwei Finger             zoomen, waagerecht Zeit, senkrecht Preis
+     an der Achse ziehen     Preisskala dehnen und stauchen
+
+   Der senkrechte Anteil war vorher gar nicht vorhanden: die Skala rechnete
+   sich in jedem Bild neu aus den Kerzen aus, also gab es nichts zu
+   verstellen. Wer daran zog, zog ins Leere. Jetzt merkt sich S.vs ein
+   Fenster, sobald jemand es anfasst - und AUTO gibt es wieder her. */
+
+/** Liegt der Finger auf der Preisachse? Die Trefferflaeche ist etwas
+    breiter als die Achse selbst; 56 Bildpunkte sind auf einem Telefon
+    knapp vier Millimeter und ein Daumen ist breiter. */
+function anAchse(clientX){
+  const r = cv.getBoundingClientRect();
+  return (clientX - r.left) > (W - PAD.r - 12);
+}
+/** Der Balkenindex unter einem Bildschirmpunkt, als Bruch. */
+function iBeiX(clientX){
+  const r = cv.getBoundingClientRect();
+  const sp = Math.max(1e-6, span());
+  return (S.vw?.i0 || 0) + ((clientX - r.left) / ((W - PAD.r) / sp)) - 0.5;
+}
+/** Das gerade geltende Preisfenster - von Hand gesetztes oder das, was
+    die Automatik im letzten Bild ergeben hat. */
+function skalaJetzt(){
+  const q = S.vs || S.autoScale;
+  return q && q.hi > q.lo ? {lo:q.lo, hi:q.hi} : null;
+}
+/** Preisfenster setzen, mit Grenzen.
+
+    Ohne Grenzen laesst sich der Chart in einer einzigen Wischbewegung so
+    weit verstellen, dass gar nichts mehr im Bild ist - und dann sieht er
+    kaputt aus, nicht verstellt. Bezug ist die Spanne, die die Automatik
+    ergeben haette: hoechstens das Sechzigfache davon, mindestens ein
+    Sechzigstel, und die Mitte hoechstens fuenf Spannen vom Kurs weg. */
+function setzeSkala(lo, hi){
+  if(!(hi > lo) || !isFinite(lo) || !isFinite(hi)) return;
+  const a = S.autoScale;
+  if(a && a.hi > a.lo){
+    const aR = a.hi - a.lo, aM = (a.hi + a.lo) / 2;
+    let r = Math.max(aR/25, Math.min(aR*25, hi - lo));
+    let m = (hi + lo) / 2;
+    m = Math.max(aM - aR*5, Math.min(aM + aR*5, m));
+    lo = m - r/2; hi = m + r/2;
+  }
+  S.vs = {lo, hi};
+}
+
 let drag=null,pinch=null,press=null,tuckTimer=null;
 const wrap=$("cvwrap");
 
@@ -1483,51 +1918,115 @@ function tuck(on){
 wrap.addEventListener("touchstart",e=>{
   tuck(true);
   if(e.touches.length===1){
-    drag={x:e.touches[0].clientX, i0:S.vw?.i0||0, t:Date.now(), moved:false};
-    press=setTimeout(()=>{ // langes Drücken blendet das Fadenkreuz ein
-      const r=cv.getBoundingClientRect();
-      S.cross=Math.floor((e.touches[0].clientX-r.left)/((W-PAD.r)/Math.max(1,span())));
-      buzz(8); draw();
-    },320);
+    const t=e.touches[0], cx=t.clientX, cy=t.clientY;
+    const sc=skalaJetzt(), achse=anAchse(cx);
+    // Die Spanne wird HIER festgehalten.
+    //
+    // Vorher las das Schieben sie waehrend der Bewegung neu - und zwar
+    // nachdem i0 schon verschoben war. Damit blieb i1 stehen und nur die
+    // linke Kante lief mit: aus dem Schieben wurde ein Dehnen. Das war
+    // der eigentliche Grund, warum sich der Chart nicht bewegen liess.
+    drag={x:cx, y:cy, i0:S.vw?.i0||0, sp:span(), achse:achse,
+          lo:sc?sc.lo:0, hi:sc?sc.hi:0, t:Date.now(), moved:false};
+    if(!achse) press=setTimeout(()=>{ // langes Drücken blendet das Fadenkreuz ein
+      S.cross=iBeiX(cx); buzz(8); paint();
+    },380);
   } else if(e.touches.length===2){
     clearTimeout(press);
-    pinch={d:Math.abs(e.touches[0].clientX-e.touches[1].clientX), sp:span(), i0:S.vw?.i0||0};
+    const a=e.touches[0], b=e.touches[1], sc=skalaJetzt();
+    pinch={dx:Math.abs(a.clientX-b.clientX), dy:Math.abs(a.clientY-b.clientY),
+           sp:span(), i0:S.vw?.i0||0,
+           mx:(a.clientX+b.clientX)/2, my:(a.clientY+b.clientY)/2,
+           lo:sc?sc.lo:0, hi:sc?sc.hi:0};
     drag=null;
   }
 },{passive:true});
 wrap.addEventListener("touchmove",e=>{
   if(!S.vw) return;
+  const n=(S.data?.bars||[]).length, r=cv.getBoundingClientRect();
   if(pinch&&e.touches.length===2){
     clearTimeout(press);
-    const d=Math.abs(e.touches[0].clientX-e.touches[1].clientX);
-    if(d>10){
-      const n=(S.data.bars||[]).length;
-      const sp=Math.max(10,Math.min(n,pinch.sp*(pinch.d/d))), mid=pinch.i0+pinch.sp/2;
-      S.vw={i0:mid-sp/2,i1:mid+sp/2}; clampView(); draw();
+    const a=e.touches[0], b=e.touches[1];
+    const dx=Math.abs(a.clientX-b.clientX), dy=Math.abs(a.clientY-b.clientY);
+    // Jede Achse nur dann, wenn die Finger in ihrer Richtung ueberhaupt
+    // auseinanderstehen. Bei einem waagerechten Griff ist der senkrechte
+    // Abstand ein paar Bildpunkte Zittern - daraus einen Zoomfaktor zu
+    // rechnen hiesse, die Preisskala bei jeder Zeitgeste mitzureissen.
+    if(pinch.dx>24 && dx>24){
+      const sp2=Math.max(10,Math.min(n,pinch.sp*(pinch.dx/dx)));
+      // Um den Mittelpunkt der Geste, nicht um die Bildmitte: der Punkt
+      // zwischen den Fingern soll unter ihnen stehen bleiben.
+      const f=Math.max(0,Math.min(1,(pinch.mx-r.left)/Math.max(1,W-PAD.r)));
+      const anker=pinch.i0+f*pinch.sp;
+      S.vw={i0:anker-f*sp2, i1:anker-f*sp2+sp2}; clampView();
     }
+    if(pinch.dy>24 && dy>24 && pinch.hi>pinch.lo && S.geo){
+      const g=S.geo;
+      const f=Math.max(0,Math.min(1,(pinch.my-r.top-g.topPad)/Math.max(1,g.ph)));
+      const ankerP=pinch.hi-f*(pinch.hi-pinch.lo);
+      const R=(pinch.hi-pinch.lo)*(pinch.dy/dy);
+      setzeSkala(ankerP-(1-f)*R, ankerP+f*R);
+    }
+    paint();
   } else if(drag&&e.touches.length===1){
-    const dx=e.touches[0].clientX-drag.x;
-    if(Math.abs(dx)>6){ clearTimeout(press); drag.moved=true; }
-    if(S.cross!=null){
-      const r=cv.getBoundingClientRect();
-      S.cross=Math.floor((e.touches[0].clientX-r.left)/((W-PAD.r)/Math.max(1,span())));
-      draw(); return;
-    }
+    const t=e.touches[0];
+    const dx=t.clientX-drag.x, dy=t.clientY-drag.y;
+    // Drei Bildpunkte statt sechs. Sechs waren auf einem 3x-Bildschirm
+    // fast zwei Millimeter tote Zone am Anfang jeder Geste, und genau
+    // dieser Anfang entscheidet, ob sich etwas fluessig anfuehlt.
+    if(!drag.moved && Math.abs(dx)+Math.abs(dy)>3){ clearTimeout(press); drag.moved=true; }
+    if(S.cross!=null){ S.cross=iBeiX(t.clientX); paint(); return; }
     if(!drag.moved) return;
-    const per=(W-PAD.r)/Math.max(1,span());
-    S.vw.i0=drag.i0-dx/per; S.vw.i1=S.vw.i0+span(); clampView(); draw();
+    if(drag.achse){
+      // An der Achse ziehen dehnt und staucht das Preisfenster um seine
+      // Mitte. Nach unten heisst mehr Preis im Bild, nach oben weniger -
+      // dieselbe Richtung wie in jeder Chartsoftware.
+      if(drag.hi>drag.lo){
+        const c=(drag.lo+drag.hi)/2, hR=(drag.hi-drag.lo)/2;
+        const k=Math.exp(dy/230);
+        setzeSkala(c-hR*k, c+hR*k);
+      }
+    } else {
+      // Zeit waagerecht. drag.sp ist die Spanne vom Anfang der Geste -
+      // siehe oben, warum sie nicht unterwegs gelesen werden darf.
+      const per=(W-PAD.r)/Math.max(1,drag.sp);
+      S.vw={i0:drag.i0-dx/per, i1:drag.i0-dx/per+drag.sp}; clampView();
+      // Preis senkrecht. Erst ab vier Bildpunkten, damit ein waagerechter
+      // Wisch nicht bei jedem Zittern die Skala von der Automatik loest.
+      if(Math.abs(dy)>4 && drag.hi>drag.lo && S.geo){
+        const d=(drag.hi-drag.lo)*(dy/Math.max(1,S.geo.ph));
+        setzeSkala(drag.lo+d, drag.hi+d);
+      }
+    }
+    paint();
   }
 },{passive:true});
-wrap.addEventListener("touchend",()=>{
+wrap.addEventListener("touchend",e=>{
   clearTimeout(press);
-  if(S.cross!=null){ S.cross=null; draw(); }
+  if(S.cross!=null){ S.cross=null; paint(); }
+  // Kurzes Tippen auf AUTO gibt die Skala an die Automatik zurueck.
+  const b=S.autoBtn, t=e.changedTouches && e.changedTouches[0];
+  if(b && t && drag && !drag.moved){
+    const r=cv.getBoundingClientRect();
+    const x=t.clientX-r.left, yy=t.clientY-r.top;
+    if(x>=b.x-4 && x<=b.x+b.w+4 && yy>=b.y-6 && yy<=b.y+b.h+6){
+      S.vs=null; buzz(8); paint();
+    }
+  }
   drag=null; pinch=null;
 },{passive:true});
 wrap.addEventListener("wheel",e=>{
   if(!S.vw) return; e.preventDefault();
+  // Ueber der Achse zoomt das Rad den Preis, sonst die Zeit. Am
+  // Schreibtisch ist das die einzige Entsprechung zur Zwei-Finger-Geste.
+  if(anAchse(e.clientX)){
+    const sc=skalaJetzt(); if(!sc) return;
+    const c=(sc.lo+sc.hi)/2, hR=(sc.hi-sc.lo)/2, k=e.deltaY>0?1.12:0.89;
+    setzeSkala(c-hR*k, c+hR*k); paint(); return;
+  }
   const n=(S.data.bars||[]).length;
   const sp=Math.max(10,Math.min(n,span()*(e.deltaY>0?1.15:.87))), mid=S.vw.i0+span()/2;
-  S.vw={i0:mid-sp/2,i1:mid+sp/2}; clampView(); draw();
+  S.vw={i0:mid-sp/2,i1:mid+sp/2}; clampView(); paint();
 },{passive:false});
 
 // ======================= Rendern =======================
@@ -1567,7 +2066,7 @@ function render(){
         + (S.layers.tpo && d.tpo?.brackets ? " + TPO "+d.tpo.brackets+"×"+d.tpo.bracket_min+"min" : "")
       : ""}${S.trails?.tracks?.length && S.layers.orbs
       ? " · "+S.trails.tracks.length+" Spuren" : ""} · ${hhmm(d.ts)}`;
-  renderTf(); renderStrip(); renderLevel(); renderGamma(); draw();
+  renderTf(); renderStrip(); renderLevel(); renderGamma(); paint();
 }
 
 function renderTf(){
@@ -1582,7 +2081,9 @@ function renderTf(){
   $("tfbar").querySelectorAll("[data-t]").forEach(b=>b.onclick=()=>{
     S.tf=b.dataset.t; S.view0=false; buzz(8); load();
   });
-  $("btnFit").onclick=()=>{ S.fitAll=!S.fitAll; buzz(8); renderTf(); draw(); };
+  // Der Zoomschalter rechnet die Skala neu aus - eine von Hand gesetzte
+  // wuerde ihn stumm verschlucken.
+  $("btnFit").onclick=()=>{ S.fitAll=!S.fitAll; S.vs=null; buzz(8); renderTf(); paint(); };
   $("btnFull").onclick=()=>{
     S.immersive=!S.immersive;
     document.body.classList.toggle("immersive", S.immersive);
@@ -1638,6 +2139,7 @@ try{ setStrip(localStorage.getItem("stripOpen") === "1"); }catch(e){}
 function switchMarket(k){
   if(k===S.market) return;
   S.market=k; S.plan=null; S.data=null; S.view0=false; S.lastMsgCount=0; S.trails=null;
+  S.vs=null; S.cross=null;
   buzz(10); closeSheet();
   ["p-level","p-gamma","p-agent","p-plan"].forEach(id=>$(id).innerHTML='<div class="skel"><i></i><i></i><i></i></div>');
   load(); loadMessages(); loadPlan(); loadTrails();
