@@ -12,10 +12,10 @@ import time
 import threading
 from datetime import datetime, timezone
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, redirect
 from flask_cors import CORS
 
-from . import market, cboe, gex, zones, news, walls, oanda
+from . import market, cboe, gex, zones, news, walls, oanda, ctrader
 from .agent import AGENT
 from .daybook import BOOK
 from . import keepalive, store
@@ -377,6 +377,10 @@ threading.Thread(target=_scan_loop, daemon=True).start()
 # Ohne Schluessel passiert hier nichts - die Bruecke und die verzoegerte
 # Quelle bleiben unberuehrt.
 oanda.start(_active_markets)
+# cTrader: der eigene Broker ueber das Netz, ohne PC. Haelt eine
+# dauerhafte Verbindung, sobald Kennung, Geheimnis und die einmalige
+# Zustimmung vorliegen.
+ctrader.start()
 keepalive.start()
 
 
@@ -385,6 +389,7 @@ keepalive.start()
 def health():
     return jsonify({"ok": True, "active": _active_markets(),
                     "oanda": oanda.status(),
+                    "ctrader": ctrader.status(),
                     "budget": AGENT.budget(),
                     "keepalive": keepalive.status(),
                     "store": store.health()})
@@ -528,7 +533,53 @@ def live_state():
     # Der zweite Weg gehoert mit in die Auskunft: ist gar nichts live,
     # soll erkennbar sein, ob beide Wege fehlen oder nur einer.
     st["oanda"] = oanda.status()
+    st["ctrader"] = ctrader.status()
     return jsonify(st)
+
+
+def _ctrader_redirect():
+    """Die Weiterleitungsadresse - dieselbe, die bei der App-Registrierung
+    hinterlegt wird. Aus der Anfrage abgeleitet statt fest eingetragen,
+    damit sie auf einer eigenen Adresse genauso stimmt."""
+    return request.url_root.rstrip("/") + "/api/ctrader/callback"
+
+
+@app.route("/api/ctrader/login")
+def ctrader_login():
+    """Schickt den Nutzer einmal zu cTrader, um zuzustimmen."""
+    if not ctrader.configured():
+        return ("CTRADER_CLIENT_ID und CTRADER_CLIENT_SECRET fehlen. "
+                "Beides bei Render unter Environment eintragen."), 400
+    return redirect(ctrader.auth_url(_ctrader_redirect()))
+
+
+@app.route("/api/ctrader/callback")
+def ctrader_callback():
+    """Nimmt den Code der Zustimmung entgegen und tauscht ihn ein.
+
+    Antwortet als Seite, nicht als JSON: hier landet ein Mensch im
+    Browser, und der soll lesen koennen, ob es geklappt hat.
+    """
+    fehler = request.args.get("error")
+    code = request.args.get("code")
+    if fehler or not code:
+        return ("<h3>Nicht verbunden</h3><p>%s</p>"
+                % (fehler or "Kein Code erhalten.")), 400
+    t = ctrader.einloesen(code, _ctrader_redirect())
+    if not t:
+        st = ctrader.status()
+        return ("<h3>Nicht verbunden</h3><p>%s</p>"
+                % (st.get("fehler") or "Tausch fehlgeschlagen")), 400
+    ctrader.start()
+    return ("<h3>cTrader verbunden</h3>"
+            "<p>Du kannst dieses Fenster schliessen. Der Chart nimmt den "
+            "Kurs, sobald die Verbindung steht.</p>")
+
+
+@app.route("/api/ctrader/logout", methods=["POST"])
+def ctrader_logout():
+    ctrader.abmelden()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/space", methods=["GET", "POST", "DELETE"])

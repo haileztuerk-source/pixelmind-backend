@@ -2416,7 +2416,12 @@ function kursLage(d){
     // sind beide live, aber nicht dasselbe: der eine ist der Kurs, zu
     // dem gehandelt wird, der andere eine sehr nahe Naeherung. Wer das
     // nicht unterscheiden kann, haelt eine Naeherung fuer seinen Kurs.
-    return {k:"live", t: d.live.src === "oanda" ? "LIVE · OANDA" : "LIVE"};
+    // Drei Wege, und der Unterschied gehoert benannt: Bruecke und
+    // cTrader liefern den Kurs des EIGENEN Brokers, OANDA den eines
+    // fremden. Wer das nicht unterscheiden kann, haelt eine Naeherung
+    // fuer seinen Kurs.
+    const woher = {oanda:"LIVE · OANDA", ctrader:"LIVE · cTrader"};
+    return {k:"live", t: woher[d.live.src] || "LIVE"};
   }
   if(c.open === false){
     const bis = c.next_ts ? new Date(c.next_ts*1000) : null;
@@ -2906,7 +2911,10 @@ $("idbtn").onclick=()=>{
             ? `— das ist <b>OANDAs</b> CFD über den Server, nicht der deines Brokers.
                Der Unterschied ist Spread und Finanzierung, ein paar Punkte, und der
                gemessene Versatz gleicht ihn aus. Für deinen Kurs auf den Punkt:
-               <b>START-BRUECKE.bat</b> starten, die hat Vorrang.`
+               <b>START-BRUECKE.bat</b> starten oder cTrader verbinden, beide haben
+               Vorrang.`
+            : S.data.live.src==="ctrader"
+            ? `— dein eigener Broker über cTrader, ohne dass dein PC laufen muss.`
             : `— dein eigener Broker über die Brücke.`}
          Letzter Tick vor ${Math.round(S.data.live.tick_age||0)} Sekunden.`
       : `Der Chart hängt gerade an der öffentlichen Cboe-Quelle, und die ist
@@ -2917,11 +2925,14 @@ $("idbtn").onclick=()=>{
          aus MetaTrader 5 auf deinem PC:
          <b>bridge/START-BRUECKE.bat</b> doppelklicken, MT5 offen lassen —
          dann steht hier LIVE und der Punkt oben wird grün.
-         <br><br>Ohne PC geht es auch: ein kostenloses OANDA-Übungskonto, den
-         Zugangsschlüssel als <b>OANDA_TOKEN</b> bei Render eintragen — dann holt
-         der Server den Kurs selbst. Das ist dann OANDAs CFD, nicht deiner; die
-         Brücke behält immer Vorrang.
-         <br><br>Der Server ist für beides eingerichtet und wartet.`}</div>`);
+         <br><br>Ohne PC geht es auf zwei Wegen:
+         <br>• <b>cTrader</b> (FTMO und andere) — dein <i>eigener</i> Kurs über den
+         Server. Kennung und Geheimnis bei Render eintragen, dann einmal
+         <b>/api/ctrader/login</b> öffnen und zustimmen.
+         <br>• <b>OANDA</b> — ein kostenloses Übungskonto, Schlüssel als
+         <b>OANDA_TOKEN</b> bei Render. Das ist dann OANDAs CFD, nicht deiner.
+         <br><br>Rangfolge: Brücke → cTrader → OANDA → verzögert. Du kannst alles
+         nebeneinander einrichten; der Chart nimmt automatisch die beste Quelle.`}</div>`);
   $("spOpen").onclick = () => spaceSheet();
   $("sheetBody").querySelectorAll("[data-m]").forEach(el=>el.onclick=()=>switchMarket(el.dataset.m));
 };

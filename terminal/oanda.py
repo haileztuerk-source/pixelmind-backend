@@ -219,10 +219,12 @@ def _einmal(markt):
     if not inst:
         return
 
-    # Die Bruecke hat Vorrang. Laeuft sie, nicht dazwischenfunken -
-    # sonst ueberschriebe ein fremder CFD den eigenen.
+    # Eigene Kurse haben Vorrang. Laeuft die Bruecke oder cTrader,
+    # nicht dazwischenfunken - beide liefern den Kurs des eigenen
+    # Brokers, dieser hier den eines fremden. Ein fremder CFD, der den
+    # eigenen ueberschreibt, waere ein stiller Rueckschritt.
     st = FEED.state(markt)
-    if st.get("live") and st.get("src") == "bridge":
+    if st.get("live") and st.get("src") in ("bridge", "ctrader"):
         return
 
     now = time.time()
