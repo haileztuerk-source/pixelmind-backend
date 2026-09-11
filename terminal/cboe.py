@@ -18,7 +18,47 @@ Die Verzoegerung wird im Frontend ausgewiesen statt versteckt.
 import re
 import time
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+# Cboe schreibt die Zeitstempel seiner Minutenbars OHNE Zonenangabe:
+# "2026-09-10T09:31:00". Gelesen als UTC ergab das eine Sitzung von 09:31
+# bis 15:59 UTC - eine Handelszeit, die es nirgends gibt. In New Yorker
+# Zeit sind es 09:31 bis 15:59, also genau die US-Regelsitzung von 9:30
+# bis 16:00. Das ist kein Auslegungsspielraum, sondern die Zeitzone.
+#
+# Der Fehler betrug im Sommer vier Stunden, im Winter fuenf, und er lief
+# durch alles hindurch: die Zeitachse las sich um vier Stunden verschoben
+# (auf einem deutschen Telefon stand 18 Uhr, wo 22 Uhr hingehoerte), die
+# Sitzungserkennung setzte an der falschen Stelle an, und das Zonenbuch
+# fror seine Marken zur falschen Zeit ein.
+try:
+    from zoneinfo import ZoneInfo
+    NY = ZoneInfo("America/New_York")
+except Exception:                                    # ohne Zonendatenbank
+    NY = None
+
+
+def _ny(naiv):
+    """Naive New Yorker Ortszeit in einen Zeitpunkt mit Zone wandeln.
+
+    Ohne zoneinfo faellt die Funktion auf die US-Sommerzeitregel zurueck:
+    zweiter Sonntag im Maerz bis erster Sonntag im November, seit 2007
+    unveraendert. Das ist kein voller Ersatz fuer die Zonendatenbank,
+    aber es ist besser als vier Stunden Fehler - und der Regelfall
+    trifft zu, weil tzdata in den Laufzeitumgebungen vorhanden ist.
+    """
+    if NY is not None:
+        return naiv.replace(tzinfo=NY)
+
+    def _sonntag(jahr, monat, n):
+        d = datetime(jahr, monat, 1)
+        d += timedelta(days=(6 - d.weekday()) % 7)   # erster Sonntag
+        return d + timedelta(weeks=n - 1)
+
+    start = _sonntag(naiv.year, 3, 2).replace(hour=2)
+    ende = _sonntag(naiv.year, 11, 1).replace(hour=2)
+    sommer = start <= naiv < ende
+    return naiv.replace(tzinfo=timezone(timedelta(hours=-4 if sommer else -5)))
 
 import requests
 
@@ -151,7 +191,7 @@ def intraday(symbol, ttl=45):
         if p.get("close") is None:
             continue
         try:
-            dt = datetime.fromisoformat(row["datetime"]).replace(tzinfo=timezone.utc)
+            dt = _ny(datetime.fromisoformat(row["datetime"]))
         except (ValueError, KeyError, TypeError):
             continue
         # Kaputte Kerzen aussortieren. Die Daten enthalten vereinzelt
@@ -180,6 +220,50 @@ def intraday(symbol, ttl=45):
         })
     bars.sort(key=lambda b: b["t"])
     return bars, stale
+
+
+def historical(symbol, ttl=3600, tage=750):
+    """Tagesbalken vom Cboe-CDN - der einzige freie Weg zur Historie.
+
+    Die Tagesebene war tot. Sie haengt als einzige an Yahoo, und Yahoo
+    drosselt Serverabfragen mit HTTP 429: gemessen lieferte /api/candles
+    fuer 1d in der Produktion null Kerzen, und der Knopf tat schlicht
+    nichts.
+
+    Dieser Pfad hier liegt auf demselben CDN, das die Ketten und die
+    Minutenbars traegt, braucht keinen Schluessel und reicht je nach
+    Symbol bis 1975 zurueck. Nicht jedes Symbol ist dabei: _SPX, _DJX,
+    _RUT und die ETFs ja, _NDX nicht - die Nasdaq vergibt ihre Historie
+    nicht zur freien Weitergabe. Fuer den Nasdaq hebt market.bars()
+    deshalb QQQ in den Indexraum, so wie es das Volumenprofil laengst
+    tut.
+
+    Der Zeitstempel sitzt auf dem Sitzungsschluss, 16 Uhr New Yorker
+    Zeit. Ein Tagesbalken ohne Uhrzeit landete sonst auf Mitternacht
+    UTC und damit auf dem falschen Kalendertag.
+    """
+    data, stale = _fetch(f"charts/historical/{symbol}", ttl)
+    if not data:
+        return [], True
+    reihen = (data.get("data") or [])[-max(1, tage):]
+    out = []
+    for row in reihen:
+        try:
+            d = datetime.fromisoformat(row["date"])
+            o, h, l, c = (float(row["open"]), float(row["high"]),
+                          float(row["low"]), float(row["close"]))
+        except (ValueError, KeyError, TypeError):
+            continue
+        if min(o, h, l, c) <= 0 or h < l:
+            continue
+        out.append({
+            "t": int(_ny(d.replace(hour=16, minute=0)).timestamp()),
+            "o": o, "h": h, "l": l, "c": c,
+            "v": 0.0, "sv": float(row.get("volume") or 0.0),
+            "cv": 0.0, "pv": 0.0,
+        })
+    out.sort(key=lambda b: b["t"])
+    return out, stale
 
 
 def aggregate(bars, minutes):

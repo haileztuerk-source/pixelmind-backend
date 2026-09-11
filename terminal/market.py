@@ -7,7 +7,7 @@ von einem Server aus erreichbar ist. Kein API-Key noetig.
 
 import time
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -16,6 +16,11 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 # Zwei gleichwertige Hosts. Yahoo drosselt einzelne Adressen stossweise mit
 # HTTP 429; der zweite Host faengt das in der Regel ab.
 HOSTS = ["https://query1.finance.yahoo.com", "https://query2.finance.yahoo.com"]
+# So lange nach einem Fehlschlag gar nicht erst fragen. Zwei Minuten sind
+# lang genug, dass eine Drosselung abklingt, und kurz genug, dass die
+# Historie nach einer Stoerung zeitnah zurueckkommt.
+DOWN_QUIET = 120.0
+_down_until = 0.0
 CHART_PATH = "/v8/finance/chart/{sym}"
 
 # Yahoo-Symbol je Markt. Das Optionssymbol steht daneben, weil die Kette
@@ -57,14 +62,36 @@ def _get(path, params, ttl):
     if hit and now - hit[0] < ttl:
         return hit[1], False
 
+    # Kurzschluss: nach einem Fehlschlag eine Weile gar nicht erst fragen.
+    #
+    # Der Cache merkte sich nur Erfolge. Yahoo drosselt aber stossweise
+    # mit HTTP 429, und dann kostete JEDER Aufruf erneut den vollen
+    # Weg ueber beide Hosts - gemessen rund zwei Sekunden, die nichts
+    # einbringen. Beim Start zahlte die App das einmal, bei jedem
+    # Wechsel der Zeitebene noch einmal, und das war der Grossteil der
+    # Wartezeit.
+    #
+    # Ein alter Stand aus dem Cache ist waehrend der Sperre besser als
+    # zwei Sekunden Warten auf nichts; gibt es keinen, faellt der
+    # Aufrufer auf das Cboe-CDN zurueck, das nicht drosselt.
+    global _down_until
+    if now < _down_until:
+        return (hit[1], True) if hit else (None, True)
+
     last_err = None
     for attempt, host in enumerate(HOSTS):
         try:
             r = requests.get(host + path, params=params,
                              headers={"User-Agent": UA}, timeout=20)
             if r.status_code == 429:
+                # KEIN Warten vor dem naechsten Host. Gemessen antwortet
+                # jeder der beiden in 0,4 Sekunden mit 429, die Pausen
+                # dazwischen summierten sich aber auf 1,2 - mehr als die
+                # Abfragen selbst. Und sie halfen nicht: der zweite Host
+                # ist ein anderer Server, seine Drosselung klingt nicht
+                # ab, weil man vier Zehntel gewartet hat. Wenn beide
+                # drosseln, uebernimmt der Kurzschluss oben.
                 last_err = "429"
-                time.sleep(0.4 * (attempt + 1))
                 continue
             if not r.ok:
                 last_err = str(r.status_code)
@@ -72,10 +99,14 @@ def _get(path, params, ttl):
             data = r.json()
             with _lock:
                 _cache[key] = (now, data)
+                _down_until = 0.0            # Yahoo antwortet wieder
             return data, False
         except Exception as exc:
             last_err = str(exc)
 
+    # Beide Hosts verweigert - fuer DOWN_QUIET Sekunden nicht mehr fragen.
+    with _lock:
+        _down_until = now + DOWN_QUIET
     if hit:
         return hit[1], True
     return None, True
@@ -327,14 +358,63 @@ def overnight_range(bars_intraday):
     """
     if not bars_intraday:
         return {}
-    last_day = datetime.fromtimestamp(bars_intraday[-1]["t"], timezone.utc).date()
-    seg = [b for b in bars_intraday
-           if datetime.fromtimestamp(b["t"], timezone.utc).date() == last_day]
+    # Gruppiert nach dem NEW YORKER Datum, nicht dem UTC-Datum. Eine
+    # Handelssitzung ist ein New Yorker Tag; in UTC gerechnet zerfaellt
+    # sie, sobald erweiterte Handelszeiten dabei sind - die laufen bis
+    # 20 Uhr Ortszeit und damit im Winter ueber Mitternacht UTC hinaus.
+    from .cboe import NY
+    zone = NY or timezone.utc
+    tag = lambda t: datetime.fromtimestamp(t, zone).date()
+    last_day = tag(bars_intraday[-1]["t"])
+    seg = [b for b in bars_intraday if tag(b["t"]) == last_day]
     if not seg:
         return {}
     return {"on_high": max(b["h"] for b in seg),
             "on_low": min(b["l"] for b in seg),
             "on_day": last_day.isoformat()}
+
+
+def us_session(now=None):
+    """Zustand der US-Regelsitzung, in New Yorker Zeit gerechnet.
+
+    Der Grund fuer diese Funktion ist eine Rueckmeldung, die genau
+    richtig war: "der Kurs laeuft nicht live". Um 12:33 deutscher Zeit
+    laeuft er tatsaechlich nicht - die US-Boerse oeffnet erst um 15:30.
+    Ein Terminal, das dann einfach stillsteht, sieht aus wie eines, das
+    kaputt ist. Es soll stattdessen sagen, woran es liegt.
+
+    Feiertage kennt die Funktion NICHT - dafuer gibt es keine freie
+    Quelle, und einen Kalender zu raten waere schlechter als zu
+    schweigen. Sie sagt deshalb nur, was aus Wochentag und Uhrzeit
+    folgt; ob wirklich gehandelt wird, verraet das Alter der Balken,
+    und das steht daneben.
+    """
+    from .cboe import NY, _ny
+    zone = NY or timezone.utc
+    jetzt = now or datetime.now(timezone.utc)
+    et = jetzt.astimezone(zone) if NY else _ny(jetzt.replace(tzinfo=None))
+    auf, zu = 9 * 60 + 30, 16 * 60
+    minute = et.hour * 60 + et.minute
+    werktag = et.weekday() < 5
+    offen = werktag and auf <= minute < zu
+
+    # Naechste Grenze: bis wann noch offen, oder ab wann wieder.
+    if offen:
+        grenze = et.replace(hour=16, minute=0, second=0, microsecond=0)
+    else:
+        grenze = et.replace(hour=9, minute=30, second=0, microsecond=0)
+        if werktag and minute < auf:
+            pass                                  # heute frueh, oeffnet noch
+        else:
+            grenze += timedelta(days=1)
+            while grenze.weekday() >= 5:
+                grenze += timedelta(days=1)
+    return {
+        "open": offen,
+        "et": et.strftime("%H:%M"),
+        "next_ts": int(grenze.timestamp()),
+        "opens_at": "15:30",                      # nur zur Anzeige, ET 9:30
+    }
 
 
 # --- Bar-Kaskade -----------------------------------------------------------
@@ -366,8 +446,65 @@ def bars(market_key, interval="15m"):
         agg = cboe.aggregate(raw, minutes)
         if agg:
             return agg, {"source": "cboe", "symbol": conf["chain"], "stale": stale}
+    else:
+        dbars, src = _tagesbalken(market_key, conf)
+        if dbars:
+            return dbars, src
     return ybars, {"source": "yahoo", "symbol": conf["index"],
                    "stale": True, "thin": True}
+
+
+def _tagesbalken(market_key, conf):
+    """Tagesbalken ohne Yahoo.
+
+    Die Tagesebene hing als einzige allein an Yahoo, und Yahoo drosselt:
+    in der Produktion gemessen null Kerzen, der Knopf "1d" tat nichts.
+    Das Cboe-CDN fuehrt eine freie Historie - fuer _SPX bis 1975 zurueck.
+
+    Fuer den Nasdaq gibt es sie nicht: die Nasdaq gibt ihren Indexverlauf
+    nicht frei weiter, _NDX antwortet mit 403. Dafuer liegt QQQ dort, und
+    QQQ in den Indexraum zu heben ist in diesem Terminal kein Notbehelf,
+    sondern der eingefuehrte Weg - das Volumenprofil tut seit jeher genau
+    das.
+
+    Das Verhaeltnis wird aus DERSELBEN Sitzung genommen, Index und ETF am
+    selben Tag. Aus verschiedenen Tagen gemessen traegt es die
+    Tagesbewegung des ETF als Fehler in jeden Balken der Historie - bei
+    QQQ waeren das am Stichtag 1,1 Prozent gewesen.
+
+    Was dieser Weg NICHT kann: die Dividende. Der ETF schuettet aus, der
+    Preisindex nicht, also driftet das Verhaeltnis ueber die Jahre - ueber
+    zwei Jahrzehnte rund drei Prozent. Deshalb reicht die Reihe nur drei
+    Jahre zurueck, und die Quelle steht als "QQQ x 41,1" in der Zeile.
+    """
+    from . import cboe
+
+    dbars, stale = cboe.historical(conf["chain"])
+    if dbars:
+        return dbars, {"source": "cboe", "symbol": conf["chain"], "stale": stale}
+
+    etf = ETFS.get(market_key)
+    if not etf:
+        return [], {}
+    ebars, stale = cboe.historical(etf)
+    idx, _s1 = cboe.intraday(conf["chain"])
+    eint, _s2 = cboe.intraday(etf)
+    if not (ebars and idx and eint):
+        return [], {}
+    ref = eint[-1]["c"]
+    spot = idx[-1]["c"]
+    if not (ref and spot) or ref <= 0 or spot <= 0:
+        return [], {}
+    ratio = spot / ref
+    # Plausibilitaet: der Verlauf muss nach dem Heben dort liegen, wo der
+    # Index steht. Ein Verhaeltnis aus zwei unpassenden Reihen faellt hier
+    # auf, statt einen um Faktoren verschobenen Chart zu zeichnen.
+    if not (0.5 < (ebars[-1]["c"] * ratio) / spot < 2.0):
+        return [], {}
+    out = [{**b, "o": b["o"] * ratio, "h": b["h"] * ratio,
+            "l": b["l"] * ratio, "c": b["c"] * ratio} for b in ebars]
+    return out, {"source": "cboe", "symbol": f"{etf} x{ratio:.1f}",
+                 "stale": stale, "lifted": True}
 
 
 ETFS = {"NQ": "QQQ", "ES": "SPY", "YM": "DIA", "RTY": "IWM", "GC": "GLD"}

@@ -223,6 +223,14 @@ def build_snapshot(key, interval="15m"):
         "vp": vp,
         "tpo": tpo,
         "session": session,
+        # Handelszeit. Damit die Oberflaeche "geschlossen" sagen kann,
+        # statt still auszusehen wie kaputt - und dazu das Alter des
+        # letzten Balkens, denn nur das beweist, ob wirklich etwas
+        # laeuft. Feiertage kennt der Kalender nicht; ein Balken, der
+        # bei angeblich offener Boerse alt bleibt, verraet sie trotzdem.
+        "clock": market.us_session(),
+        "bar_age": (datetime.now(timezone.utc).timestamp() - bars[-1]["t"]
+                    if bars else None),
         "zones": zone_list,
         "levels": levels,
         "level_gex": lgex,

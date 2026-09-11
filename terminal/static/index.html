@@ -427,6 +427,7 @@ canvas{display:block;width:100%;height:100%}
 }
 
 /* Ladezustand: Platzhalter in der Form des Inhalts statt "lädt…" */
+.livedot.shut{background:var(--ink-faint);box-shadow:none}
 .skel{padding:14px 0}
 .skel i{
   display:block;height:58px;border-radius:13px;margin-bottom:9px;
@@ -500,6 +501,9 @@ const S = {
   // Kurs steht in der Mitte. Sobald jemand an der Skala zieht, steht hier
   // ein Fenster und die Automatik schweigt, bis AUTO es wieder loescht.
   vs:null, autoScale:null, geo:null, autoBtn:null,
+  // Ladephase. "keine Kursdaten" stand beim Start im leeren Chart und
+  // sah aus wie ein Fehler, obwohl es Warten war.
+  laedt:true, ladeFehler:null,
 };
 const TFS = ["1m","5m","15m","30m","1h","1d"];
 const SYM = {NQ:"NDX", ES:"SPX", YM:"DJX", RTY:"RUT", GC:"GLD"};
@@ -571,10 +575,12 @@ function tickTo(el, val, dur=520){
 
 // ======================= Laden =======================
 async function load(){
+  const markt = S.market;
   try{
-    const r = await fetch(`/api/state?market=${S.market}&tf=${S.tf}`);
-    if(!r.ok) throw 0;
+    const r = await fetch(`/api/state?market=${markt}&tf=${S.tf}`);
+    if(!r.ok) throw new Error("Server antwortet "+r.status);
     const d = await r.json();
+    if(markt !== S.market) return;     // inzwischen weitergeklickt
     const fresh = !S.data || S.data.market!==d.market || S.data.interval!==d.interval;
     // Stand der Ausschnitt am rechten Rand, laeuft er mit. Sonst faellt
     // der Chart im Lauf der Sitzung still hinter den Kurs zurueck - man
@@ -585,6 +591,7 @@ async function load(){
     // Versatz in den Preisraum des Brokers. Steht an genau dieser einen
     // Stelle im Zustand; px() liest ihn, sonst niemand.
     S.off = (d.space && d.space.offset) || 0;
+    S.laedt = false; S.ladeFehler = null;
     if(fresh || !S.view0){ fitView(); S.vs = null; }
     else if(amRand && S.vw){
       const zu = d.bars.length - nAlt;
@@ -592,8 +599,54 @@ async function load(){
     }
     S.view0 = true;
     render();
-  }catch(e){}
+  }catch(e){
+    // Fehler nur dann zeigen, wenn noch gar nichts da ist. Steht schon
+    // ein Chart, ist ein misslungener Nachlauf kein Grund, ihn gegen
+    // eine Fehlermeldung zu tauschen - der naechste Takt holt ihn.
+    if(!S.data || !(S.data.bars||[]).length){
+      S.laedt = false;
+      S.ladeFehler = (e && e.message) ? e.message : "keine Verbindung";
+      paint();
+    }
+  }
 }
+/** Nur die Kerzen nachladen.
+
+    Beim Wechsel der Zeitebene aendert sich im ganzen Snapshot NICHTS
+    ausser den Balken: Kette, Gamma, Waende, Level, Volumenprofil und TPO
+    haengen an den Optionsdaten und an Minutenbars, nicht an der
+    gewaehlten Aufloesung. Trotzdem wurde bisher der komplette Snapshot
+    neu gebaut - gemessen 12 Sekunden fuer eine Zahl, die sich nicht
+    aendert.
+
+    Jetzt kommt zuerst der schmale Endpunkt, der nur Balken liefert; der
+    Chart steht damit sofort. Der volle Stand wird danach im Hintergrund
+    nachgezogen, damit auch die Bruecken-Kerzen und das Alter stimmen. */
+async function ladeKerzen(){
+  const tf = S.tf, markt = S.market;
+  try{
+    const r = await fetch(`/api/candles?market=${markt}&tf=${tf}`);
+    if(!r.ok) return false;
+    const d = await r.json();
+    // Zwischenzeitlich weitergeklickt? Dann gehoert die Antwort nicht
+    // mehr zu dem, was auf dem Schirm steht.
+    if(tf !== S.tf || markt !== S.market) return false;
+    if(!d.bars || !d.bars.length) return false;
+    S.data = Object.assign({}, S.data, {
+      bars: d.bars, interval: tf, bar_source: d.source});
+    S.laedt = false; S.vs = null;
+    fitView();
+    // Solange nur Balken da sind, NUR den Chart zeichnen. Die Tafeln
+    // rechts leben von Kette, Gamma und Zonenbuch - mit einem halben
+    // Snapshot gefuettert wuerden sie Unsinn anzeigen oder brechen.
+    // Sie kommen, wenn load() durch ist, und bis dahin steht ihr
+    // Ladebalken.
+    if(S.data.spot != null) render();
+    else { renderTf(); measureChrome(); paint(); }
+    return true;
+  }catch(e){ return false; }
+}
+
 async function loadTrails(){
   try{
     S.trails = await (await fetch(`/api/trails?market=${S.market}`)).json();
@@ -743,13 +796,29 @@ function half(){ return 0.5/dpr; }
 function fitView(){
   const n=(S.data?.bars||[]).length; if(!n){ S.vw=null; return; }
   const want=Math.min(n, S.tf==="1d"?90:70);
-  S.vw={i0:Math.max(0,n-want), i1:n};
+  // Ein Achtel Freiraum rechts von Anfang an: der letzte Balken steht
+  // dann nicht auf der Preisachse, sondern davor, und die Marken haben
+  // Platz, nach rechts weiterzulaufen.
+  const luft = want*0.12;
+  S.vw={i0:Math.max(0,n-want+luft), i1:Math.max(0,n-want+luft)+want};
 }
 function span(){ return S.vw ? S.vw.i1-S.vw.i0 : 0; }
+/** Wieviel Ausschnitt darf rechts neben dem letzten Balken leer bleiben.
+
+    Vorher null: der Ausschnitt endete hart am letzten Balken, und der
+    Kurs klebte damit immer am rechten Rand. Genau dort braucht man aber
+    Platz - dort liegt das, was noch nicht passiert ist, und dorthin
+    zeigen Wand, Zero-Gamma und jede Linie, die man einzeichnet.
+
+    Zwei Drittel des Ausschnitts sind der uebliche Freiraum. Ein Drittel
+    Balken bleibt immer stehen, sonst zeigt der Chart ins Nichts und man
+    findet nicht mehr zurueck. */
+const LUFT = 0.66;
 function clampView(){
   const n=(S.data?.bars||[]).length; if(!n||!S.vw) return;
   const sp=Math.max(10, Math.min(n, S.vw.i1-S.vw.i0));
-  S.vw.i0=Math.max(0, Math.min(n-sp, S.vw.i0)); S.vw.i1=S.vw.i0+sp;
+  const rechts = n - sp + sp*LUFT;
+  S.vw.i0=Math.max(0, Math.min(rechts, S.vw.i0)); S.vw.i1=S.vw.i0+sp;
 }
 
 
@@ -1419,7 +1488,21 @@ function drawOrbs(ctx, bars, y, xT, pw, ph, V, topPad){
   // einer Linie verschwammen - und eine Linie sagt nichts darueber, ob
   // dort etwas geschah. Erst mit sichtbarem Abstand bleibt die Kette
   // abzaehlbar, und genau das ist der Punkt an einer Perlenkette.
-  const pxPerSec = (pw) / Math.max(1, (t1 - t0));
+  // Wie weit zurueck darf das Band ueberhaupt behauptet werden?
+  //
+  // Gezeichnet wurde bisher ueber den ganzen sichtbaren Zeitraum. Auf
+  // der Minutenebene ist das richtig: die Wand steht seit heute frueh
+  // dort, und wo nicht gemessen wurde, ist die Perle blasser. Auf der
+  // TAGESEBENE mit drei Jahren im Bild wurde daraus eine Behauptung,
+  // die falsch ist - die Wand bei 30.000 gab es 2023 nicht, und das
+  // Band zog trotzdem quer durch den ganzen Chart.
+  //
+  // Zwei Tage sind die Grenze: so weit reicht ein Bestand, den man ohne
+  // Messung noch fortschreiben darf. Was aelter ist, wurde nicht
+  // erhoben und wird auch nicht gezeigt.
+  const VORLAUF = 2*86400;
+  const tStart = Math.max(t0, t1 - VORLAUF);
+  const pxPerSec = (pw) / Math.max(1, (t1 - tStart));
   const step = Math.max(bucket, Math.ceil(5.5 / Math.max(pxPerSec, 1e-9) / bucket) * bucket);
 
   walls.forEach(w=>{
@@ -1429,7 +1512,7 @@ function drawOrbs(ctx, bars, y, xT, pw, ph, V, topPad){
     const isIndex = w.chain_kind === "Index";
     const key = `${w.chain}|${w.side}|${w.strike}`;
 
-    for(let t = t0; t <= t1 + bucket; t += step){
+    for(let t = tStart; t <= t1 + bucket; t += step){
       const x = xT(t);
       if(x < -8 || x > pw + 8) continue;
       // Gemessen oder angenommen? Ein aufgezeichneter Wert schlaegt den
@@ -1474,14 +1557,52 @@ function drawOrbs(ctx, bars, y, xT, pw, ph, V, topPad){
   ctx.globalAlpha = 1;
 }
 
+/** Ruhige Ladeanzeige: ein Bogen, der laeuft, und ein Satz dazu.
+
+    Vorher stand hier "keine Kursdaten" - dieselben drei Woerter beim
+    Warten wie beim Ausfall. Der Unterschied ist aber der wichtigste:
+    beim einen soll man warten, beim anderen nachsehen. Also zwei
+    Zustaende, zwei Bilder, und der laufende Bogen sagt ohne Worte, dass
+    etwas passiert.
+
+    Der Bogen laeuft nur, solange geladen wird. Eine Zeichenschleife, die
+    im Hintergrund weiterdreht, kostet auf einem Telefon Akku fuer ein
+    Bild, das niemand ansieht. */
+let ladeRaf = 0;
+function ladeBild(V){
+  const cx = W/2, cy = (H-PAD.b)/2 + PAD.t;
+  const fehler = S.ladeFehler;
+  ctx.textAlign = "center";
+  if(!fehler){
+    const t = performance.now()/1000;
+    const r = 15;
+    ctx.lineWidth = 2.4; ctx.lineCap = "round";
+    ctx.strokeStyle = V("--panel-3");
+    ctx.beginPath(); ctx.arc(cx, cy-14, r, 0, 6.2832); ctx.stroke();
+    ctx.strokeStyle = V("--resist"); ctx.globalAlpha = .95;
+    const a0 = (t*1.9) % 6.2832;
+    ctx.beginPath(); ctx.arc(cx, cy-14, r, a0, a0 + 1.5 + Math.sin(t*1.3)*0.55);
+    ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.fillStyle = V("--ink-dim"); ctx.font = "13px "+V("--sans");
+    ctx.fillText("Kursdaten werden geholt", cx, cy+22);
+    ctx.fillStyle = V("--ink-faint"); ctx.font = "11px "+V("--sans");
+    ctx.fillText(SYM[S.market] ? SYM[S.market]+" · "+S.tf : S.tf, cx, cy+40);
+    if(!ladeRaf) ladeRaf = requestAnimationFrame(()=>{ ladeRaf = 0; draw(); });
+  } else {
+    ctx.fillStyle = V("--warn"); ctx.font = "13px "+V("--sans");
+    ctx.fillText("keine Kursdaten", cx, cy-6);
+    ctx.fillStyle = V("--ink-faint"); ctx.font = "11px "+V("--sans");
+    ctx.fillText(esc(fehler), cx, cy+14);
+    ctx.fillText("wird weiter versucht", cx, cy+32);
+  }
+  ctx.textAlign = "left";
+}
+
 function draw(){
   const V=n=>TH[n]||"";
   ctx.clearRect(0,0,W,H);
   const alle=S.data?.bars||[];
-  if(!alle.length){
-    ctx.fillStyle=V("--ink-faint"); ctx.font="13px "+V("--sans"); ctx.textAlign="center";
-    ctx.fillText("keine Kursdaten", W/2, H/2); return;
-  }
+  if(!alle.length){ ladeBild(V); return; }
   const topPad = PAD.t + (S.immersive ? 6 : CHROME*0.42);
   const pw=W-PAD.r, ph=H-PAD.b-topPad;
   // Grund mit leichtem Verlauf statt Flaeche - die Kerzen stehen dadurch
@@ -1669,7 +1790,13 @@ function draw(){
   // Steht die Skala von Hand, sagt das ein Schalter am Fuss der Achse.
   // Eine Ansicht, aus der man nicht zurueckfindet, ist eine Falle.
   S.autoBtn = null;
-  if(S.vs){
+  // Der Schalter erscheint, sobald irgendetwas von Hand steht - die
+  // Skala ODER der Ausschnitt. Nur an der Skala festgemacht waere er
+  // nach einem reinen Seitwaertswisch weg gewesen, und dann gaebe es
+  // keinen Weg zurueck zum Kurs.
+  const vonHand = !!S.vs || (S.vw && alle.length
+      && (S.vw.i1 < alle.length - 0.6 || S.vw.i0 > alle.length - sp*(1-LUFT*0.5)));
+  if(vonHand){
     const bw2=PAD.r-6, bh=13, bx=pw+3, by=topPad+ph-bh-2;
     ctx.fillStyle=V("--pivot"); ctx.globalAlpha=.9;
     ctx.fillRect(bx, by, bw2, bh); ctx.globalAlpha=1;
@@ -1928,6 +2055,20 @@ wrap.addEventListener("touchstart",e=>{
     // der eigentliche Grund, warum sich der Chart nicht bewegen liess.
     drag={x:cx, y:cy, i0:S.vw?.i0||0, sp:span(), achse:achse,
           lo:sc?sc.lo:0, hi:sc?sc.hi:0, t:Date.now(), moved:false};
+    // Die Preisskala einfrieren, sobald jemand den Chart anfasst.
+    //
+    // Sie rechnete sich in JEDEM Bild neu aus den gerade sichtbaren
+    // Kerzen aus. Beim Schieben hiess das: mit jedem hereinlaufenden
+    // Hoch sprang die Skala, der Chart atmete unter dem Finger und
+    // dieselbe Kerze sass nie zweimal an derselben Stelle. Zum Lesen
+    // eines Charts gehoert aber, dass der Massstab stillsteht, waehrend
+    // man sich darin bewegt.
+    //
+    // Festgehalten wird genau der Stand, der gerade zu sehen ist - es
+    // gibt also keinen Sprung im Moment des Anfassens. AUTO gibt die
+    // Automatik samt Kurs-in-der-Mitte wieder frei, und jeder Wechsel
+    // von Markt oder Zeitebene tut es von selbst.
+    if(!S.vs && sc) S.vs = {lo:sc.lo, hi:sc.hi};
     if(!achse) press=setTimeout(()=>{ // langes Drücken blendet das Fadenkreuz ein
       S.cross=iBeiX(cx); buzz(8); paint();
     },380);
@@ -1938,6 +2079,7 @@ wrap.addEventListener("touchstart",e=>{
            sp:span(), i0:S.vw?.i0||0,
            mx:(a.clientX+b.clientX)/2, my:(a.clientY+b.clientY)/2,
            lo:sc?sc.lo:0, hi:sc?sc.hi:0};
+    if(!S.vs && sc) S.vs = {lo:sc.lo, hi:sc.hi};   // siehe oben
     drag=null;
   }
 },{passive:true});
@@ -2010,7 +2152,8 @@ wrap.addEventListener("touchend",e=>{
     const r=cv.getBoundingClientRect();
     const x=t.clientX-r.left, yy=t.clientY-r.top;
     if(x>=b.x-4 && x<=b.x+b.w+4 && yy>=b.y-6 && yy<=b.y+b.h+6){
-      S.vs=null; buzz(8); paint();
+      // Beides zurueck: Skala an die Automatik, Ausschnitt an den Kurs.
+      S.vs=null; fitView(); buzz(8); paint();
     }
   }
   drag=null; pinch=null;
@@ -2024,6 +2167,8 @@ wrap.addEventListener("wheel",e=>{
     const c=(sc.lo+sc.hi)/2, hR=(sc.hi-sc.lo)/2, k=e.deltaY>0?1.12:0.89;
     setzeSkala(c-hR*k, c+hR*k); paint(); return;
   }
+  const sc0=skalaJetzt();
+  if(!S.vs && sc0) S.vs = {lo:sc0.lo, hi:sc0.hi};   // Skala stillstellen
   const n=(S.data.bars||[]).length;
   const sp=Math.max(10,Math.min(n,span()*(e.deltaY>0?1.15:.87))), mid=S.vw.i0+span()/2;
   S.vw={i0:mid-sp/2,i1:mid+sp/2}; clampView(); paint();
@@ -2036,12 +2181,13 @@ function render(){
   // Sichtbarer Unterschied zwischen live und verzoegert. Ein Chart, der
   // aussieht wie ein Kurs und eine Viertelstunde alt ist, ist
   // gefaehrlicher als einer, der sich als alt zu erkennen gibt.
+  const lage = kursLage(d);
   const lv = $("livedot");
   if(lv){
-    lv.className = "livedot " + (d.live?.live ? "on" : "off");
-    lv.title = d.live?.live
+    lv.className = "livedot " + (lage.k==="live" ? "on" : lage.k==="zu" ? "shut" : "off");
+    lv.title = lage.k==="live"
       ? `Live aus ${esc(d.live.symbol||"der Brücke")} · Tick vor ${Math.round(d.live.tick_age||0)} s`
-      : `${d.delayed_minutes||15} Minuten verzögert${d.live?.reason?" — "+esc(d.live.reason):""}`;
+      : lage.t + (d.live?.reason ? " — "+esc(d.live.reason) : "");
   }
   tickTo($("spot"), d.spot);
   const ov = S.overview.find(o=>o.key===S.market);
@@ -2057,8 +2203,8 @@ function render(){
   $("meta").innerHTML =
     `${d.space?.name ? d.space.name+" "+sgn(Math.round(d.space.offset))
         +(d.space.stale?" ⚠":"")+" · " : ""}`+
-    `${d.live?.live ? "LIVE" : (d.bar_source?.source==="cboe"?"Cboe"
-        : d.bar_source?.source==="bridge"?"Bruecke":"Yahoo")}`+
+    `${lage.t} · ${d.bar_source?.source==="cboe"?"Cboe"
+        : d.bar_source?.source==="bridge"?"Brücke":"Yahoo"}`+
     `${stale?" · STALE":""} · ATR ${fmt(d.atr)} · `+
     `${d.bars.length} Kerzen${S.layers.profil && d.vp?.basis
       ? " · "+({cme:"CME-Volumen", etf:"Stückvolumen", options:"Optionsfluss", time:"Zeit je Preis"}[d.vp.basis] || d.vp.basis)
@@ -2067,6 +2213,41 @@ function render(){
       : ""}${S.trails?.tracks?.length && S.layers.orbs
       ? " · "+S.trails.tracks.length+" Spuren" : ""} · ${hhmm(d.ts)}`;
   renderTf(); renderStrip(); renderLevel(); renderGamma(); paint();
+}
+
+/** In welchem Zustand ist der Kurs, und warum.
+
+    Es gibt drei davon, und sie zu verwechseln ist der teuerste Fehler,
+    den diese App machen kann:
+
+      LIVE       die Bruecke liefert Ticks vom Broker
+      VERZOEGERT die Boerse laeuft, Cboe liefert mit 15 Minuten Abstand
+      ZU         die Boerse ist geschlossen, der Kurs KANN nicht laufen
+
+    Der dritte Fall sah bisher aus wie der zweite, nur kaputt: der Chart
+    stand still und nichts sagte, warum. Um halb eins deutscher Zeit ist
+    aber schlicht noch nicht geoeffnet - die US-Sitzung beginnt um 15:30.
+
+    Der Feiertag ist der Grund, warum hier nicht allein der Kalender
+    zaehlt: den kennt der Server nicht. Bleibt ein Balken bei angeblich
+    offener Boerse aelter als eine halbe Stunde, sagt die Zeile das und
+    behauptet nichts. */
+function kursLage(d){
+  const c = d.clock || {};
+  const alt = d.bar_age;
+  if(d.live?.live) return {k:"live", t:"LIVE"};
+  if(c.open === false){
+    const bis = c.next_ts ? new Date(c.next_ts*1000) : null;
+    const std = bis ? (c.next_ts*1000 - Date.now())/3600000 : null;
+    const wann = !bis ? "" : std != null && std < 14
+      ? " · öffnet "+bis.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})
+      : " · öffnet "+bis.toLocaleDateString("de-DE",{weekday:"short"})
+        +" "+bis.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"});
+    return {k:"zu", t:"BÖRSE ZU"+wann};
+  }
+  if(c.open === true && alt != null && alt > 1800)
+    return {k:"zu", t:"keine frischen Kurse seit "+Math.round(alt/60)+" min"};
+  return {k:"delay", t:(d.delayed_minutes||15)+" min verzögert"};
 }
 
 function renderTf(){
@@ -2079,10 +2260,22 @@ function renderTf(){
     + `<button class="tfc icon" id="btnFit" aria-label="Zoom">${S.fitAll?"⤡":"⤢"}</button>`
     + `</div>`;
   $("tfbar").querySelectorAll("[data-t]").forEach(b=>b.onclick=()=>{
-    S.tf=b.dataset.t; S.view0=false; buzz(8); load();
+    if(b.dataset.t === S.tf) return;
+    S.tf=b.dataset.t; S.view0=false; S.vs=null; buzz(8);
+    renderTf();                      // der Knopf faerbt sich sofort
+    // Kerzen zuerst - sie sind das, worauf man wartet. Der volle Stand
+    // kommt hinterher und ersetzt sie klaglos, wenn er da ist.
+    ladeKerzen().then(()=>load());
   });
   // Der Zoomschalter rechnet die Skala neu aus - eine von Hand gesetzte
   // wuerde ihn stumm verschlucken.
+  // Die gewaehlte Zeitebene ins Sichtfeld holen. Die Leiste scrollt
+  // waagerecht, und "1d" steht ganz rechts - nach dem Antippen war der
+  // aktive Knopf aus dem Bild geschoben und die Leiste sah aus, als sei
+  // gar nichts gewaehlt.
+  const anKnopf = $("tfbar").querySelector(".tfc.on");
+  if(anKnopf && anKnopf.scrollIntoView)
+    anKnopf.scrollIntoView({block:"nearest", inline:"nearest"});
   $("btnFit").onclick=()=>{ S.fitAll=!S.fitAll; S.vs=null; buzz(8); renderTf(); paint(); };
   $("btnFull").onclick=()=>{
     S.immersive=!S.immersive;
@@ -2139,10 +2332,11 @@ try{ setStrip(localStorage.getItem("stripOpen") === "1"); }catch(e){}
 function switchMarket(k){
   if(k===S.market) return;
   S.market=k; S.plan=null; S.data=null; S.view0=false; S.lastMsgCount=0; S.trails=null;
-  S.vs=null; S.cross=null;
+  S.vs=null; S.cross=null; S.laedt=true; S.ladeFehler=null;
   buzz(10); closeSheet();
   ["p-level","p-gamma","p-agent","p-plan"].forEach(id=>$(id).innerHTML='<div class="skel"><i></i><i></i><i></i></div>');
-  load(); loadMessages(); loadPlan(); loadTrails();
+  ladeKerzen().then(()=>load());   // Kerzen zuerst, siehe unten beim Start
+  loadMessages(); loadPlan(); loadTrails();
 }
 
 function renderLevel(){
@@ -2550,7 +2744,15 @@ function layerSheet(){
 addEventListener("resize",()=>{ resize(); track.scrollLeft=S.view*track.clientWidth; });
 new ResizeObserver(resize).observe($("cvwrap"));
 resize();
-loadOverview(); load(); loadMessages(); loadPlan(); loadTrails();
+// Kerzen zuerst, dann der Rest.
+//
+// Der volle Snapshot braucht beim kalten Dienst gemessen gut drei
+// Sekunden - er baut Kette, Gammagitter, Waende, Profil und TPO. Die
+// Kerzen allein sind in einem Bruchteil da, und sie sind das, was man
+// beim Aufmachen sehen will. Der Rest legt sich darueber, sobald er da
+// ist; bis dahin steht ein Chart statt eines Ladezeichens.
+ladeKerzen().then(()=>load());
+loadOverview(); loadMessages(); loadPlan(); loadTrails();
 setInterval(()=>{ load(); loadMessages(); }, 20000);
 setInterval(loadOverview, 60000);
 setInterval(loadTrails, 60000);
