@@ -1669,6 +1669,26 @@ function draw(){
   if(!S.fitAll){
     lo = Math.max(lo, barLo - barRange*0.25);
     hi = Math.min(hi, barHi + barRange*0.25);
+  } else {
+    // "Alles zeigen" hiess woertlich alles - und das war der Fehler.
+    //
+    // Gemessen: die Skala sprang von 183 auf 3.276 Punkte, weil die
+    // Put-Wand bei 27.500 und die Call-Wand bei 30.000 mit hineingezogen
+    // wurden. Die Kerzen des Tages umfassen 183 Punkte, also 5,6 Prozent
+    // davon - ein verwaschener Streifen, in dem keine einzelne Kerze
+    // mehr zu erkennen war. Der Chart sah kaputt aus, nicht
+    // herausgezoomt, und genau so wurde er auch gemeldet.
+    //
+    // Auch die weiteste Ansicht muss den Kurs noch zeigen. Das
+    // Sechsfache der Kerzenspanne laesst ihnen ein Sechstel der Hoehe -
+    // genug, um eine Kerze als Kerze zu lesen - und zeigt trotzdem ein
+    // Vielfaches dessen, was die normale Ansicht zeigt. Was danach noch
+    // ausserhalb liegt, nennt die Randmarke; die ist dafuer jetzt auch
+    // in dieser Ansicht eingeschaltet.
+    const mitte = S.data.spot != null ? S.data.spot : (barLo + barHi) / 2;
+    const halb = barRange * 3;
+    lo = Math.max(lo, Math.min(barLo, mitte - halb));
+    hi = Math.min(hi, Math.max(barHi, mitte + halb));
   }
 
   // Der Kurs steht in der Mitte, und zwar immer.
@@ -1820,7 +1840,12 @@ function draw(){
   // Skala ODER der Ausschnitt. Nur an der Skala festgemacht waere er
   // nach einem reinen Seitwaertswisch weg gewesen, und dann gaebe es
   // keinen Weg zurueck zum Kurs.
-  const vonHand = !!S.vs || (S.vw && alle.length
+  // S.fitAll gehoert dazu. Ohne ihn erschien in der weiten Ansicht gar
+  // kein AUTO - und das war der Zustand, in dem man ihn am dringendsten
+  // braucht: die Kerzen sind klein, nichts sieht mehr vertraut aus, und
+  // der einzige Weg zurueck waere derselbe Knopf gewesen, den man als
+  // Ursache nicht erkannt hat.
+  const vonHand = !!S.vs || S.fitAll || (S.vw && alle.length
       && (S.vw.i1 < alle.length - 0.6 || S.vw.i0 > alle.length - sp*(1-LUFT*0.5)));
   if(vonHand){
     const bw2=PAD.r-6, bh=13, bx=pw+3, by=topPad+ph-bh-2;
@@ -1898,7 +1923,12 @@ function draw(){
   // Level ausserhalb des Fensters als Randmarke. Die Skala dafuer
   // aufzuziehen wuerde die Kerzen zu einem Strich stauchen - die Marke
   // sagt dasselbe und kostet keinen Platz.
-  if(!S.fitAll){
+  //
+  // Auch in der weiten Ansicht. Frueher war sie dort abgeschaltet, weil
+  // "alles zeigen" ja alles ins Bild holte; seit auch diese Ansicht eine
+  // Grenze hat, kann etwas ausserhalb liegen - und dann soll es genannt
+  // werden.
+  {
     const off = lv.filter(l=>l.badge && (l.p > hi || l.p < lo));
     const above = off.filter(l=>l.p > hi).sort((a,b)=>a.p-b.p).slice(0,3);
     const below = off.filter(l=>l.p < lo).sort((a,b)=>b.p-a.p).slice(0,3);
@@ -2276,8 +2306,14 @@ wrap.addEventListener("touchend",e=>{
     const r=cv.getBoundingClientRect();
     const x=t.clientX-r.left, yy=t.clientY-r.top;
     if(x>=b.x-4 && x<=b.x+b.w+4 && yy>=b.y-6 && yy<=b.y+b.h+6){
-      // Beides zurueck: Skala an die Automatik, Ausschnitt an den Kurs.
-      S.vs=null; fitView(); buzz(8); paint(); zurueckgesetzt = true;
+      // ALLES zurueck: Skala, Ausschnitt und die weite Ansicht.
+      //
+      // Die weite Ansicht fehlte hier, und das war der Grund, warum der
+      // Weg zurueck nicht funktionierte: wer den Zoom-Knopf gedrueckt
+      // hatte, kam mit AUTO nicht wieder heraus, weil AUTO nur S.vs
+      // loeschte - und S.fitAll rechnet an S.vs vorbei.
+      S.vs=null; S.fitAll=false; fitView(); renderTf(); buzz(8); paint();
+      zurueckgesetzt = true;
     }
   }
   // Doppeltipp irgendwo auf dem Chart tut dasselbe - die Geste, die man
@@ -2288,7 +2324,7 @@ wrap.addEventListener("touchend",e=>{
     const jetzt = Date.now();
     const dx = t.clientX-letzterTipp.x, dy = t.clientY-letzterTipp.y;
     if(jetzt-letzterTipp.t < 320 && Math.abs(dx)<30 && Math.abs(dy)<30){
-      S.vs=null; fitView(); buzz(10); paint();
+      S.vs=null; S.fitAll=false; fitView(); renderTf(); buzz(10); paint();
       letzterTipp.t = 0;                     // verbraucht, kein Zaehler fuer einen dritten Tipp
     } else {
       letzterTipp = {t:jetzt, x:t.clientX, y:t.clientY};
@@ -2413,7 +2449,9 @@ function renderTf(){
     + `</div><div class="tficons">`
     + `<button class="tfc icon" id="btnFull" aria-label="Vollbild">${S.immersive?"◱":"◰"}</button>`
     + `<button class="tfc icon" id="btnLayers" aria-label="Struktur">☰</button>`
-    + `<button class="tfc icon" id="btnFit" aria-label="Zoom">${S.fitAll?"⤡":"⤢"}</button>`
+    + `<button class="tfc icon ${S.fitAll?"on":""}" id="btnFit"`
+    + ` aria-label="${S.fitAll?"weite Ansicht aus":"weite Ansicht"}"`
+    + ` aria-pressed="${S.fitAll?"true":"false"}">${S.fitAll?"⤡":"⤢"}</button>`
     + `</div>`;
   $("tfbar").querySelectorAll("[data-t]").forEach(b=>b.onclick=()=>{
     if(b.dataset.t === S.tf) return;
