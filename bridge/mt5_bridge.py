@@ -59,10 +59,44 @@ except ImportError:
     sys.exit("Fehlt: pip install requests")
 
 
-URL = os.environ.get("TERMINAL_URL", "http://127.0.0.1:8770").rstrip("/")
-TOKEN = os.environ.get("LIVE_TOKEN", "")
-SYMBOL = os.environ.get("MT5_SYMBOL", "USTEC")
-MARKET = os.environ.get("MARKET", "NQ")
+def _einstellungen():
+    """Liest bruecke.ini neben diesem Skript, falls vorhanden.
+
+    Der Weg ueber `set TERMINAL_URL=...` in der Eingabeaufforderung
+    funktioniert, aber er ist die Huerde, an der die Bruecke haengen
+    blieb: drei Zeilen tippen, bei jedem Start neu, und ein Tippfehler
+    im Geheimnis meldet sich erst als "abgewiesen". Mit einer Datei
+    daneben wird daraus ein Doppelklick - START-BRUECKE.bat fragt die
+    Werte einmal ab und schreibt sie hierhin.
+
+    Umgebungsvariablen haben Vorrang, damit der alte Weg weiter gilt.
+    """
+    pfad = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bruecke.ini")
+    werte = {}
+    try:
+        with open(pfad, encoding="utf-8-sig") as f:
+            for zeile in f:
+                zeile = zeile.strip()
+                if not zeile or zeile.startswith("#") or "=" not in zeile:
+                    continue
+                k, _, v = zeile.partition("=")
+                werte[k.strip().upper()] = v.strip()
+    except OSError:
+        pass
+    return werte
+
+
+_INI = _einstellungen()
+
+
+def _wert(name, standard=""):
+    return os.environ.get(name) or _INI.get(name) or standard
+
+
+URL = _wert("TERMINAL_URL", "http://127.0.0.1:8770").rstrip("/")
+TOKEN = _wert("LIVE_TOKEN", "")
+SYMBOL = _wert("MT5_SYMBOL", "USTEC")
+MARKET = _wert("MARKET", "NQ")
 
 TICK_EVERY = 2.0        # Sekunden zwischen zwei Kursmeldungen
 BARS_EVERY = 60.0       # Sekunden zwischen zwei Kerzenlieferungen

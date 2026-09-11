@@ -10,3 +10,8 @@ broker_space.json
 broker_space.json.tmp
 wall_trail_*.json
 wall_trail_*.json.tmp
+
+# Zugangsdaten der MT5-Bruecke. Enthaelt das LIVE_TOKEN im Klartext -
+# die Datei entsteht beim ersten Start von START-BRUECKE.bat auf dem
+# PC des Nutzers und gehoert niemals in die Versionsverwaltung.
+bridge/bruecke.ini

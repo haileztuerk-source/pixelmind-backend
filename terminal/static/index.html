@@ -2885,7 +2885,25 @@ $("idbtn").onclick=()=>{
           : "auf deinen CFD einstellen"}</span></div>`
     +`<div class="sh-n">Kurse und Strikes kommen bei jedem Markt aus derselben Cboe-Kette — sie liegen
       im selben Preisraum und brauchen keine Umrechnung. Dein CFD steht daneben: er folgt dem
-      Future und trägt dessen Basis. Der Versatz wird gemessen, nicht geschätzt.</div>`);
+      Future und trägt dessen Basis. Der Versatz wird gemessen, nicht geschätzt.</div>`
+    // Warum der Kurs verzoegert ist, und was dagegen hilft.
+    //
+    // In der Kopfzeile steht "15 min verzoegert", aber nicht, dass sich
+    // das aendern LAESST. Ohne diesen Hinweis liest sich die Zeile wie
+    // eine Eigenschaft der App statt wie ein fehlender Schritt.
+    +`<div class="sh-t" style="padding-top:14px">Live-Kurse</div>`
+    +`<div class="sh-n">${S.data?.live?.live
+      ? `Läuft: der Chart kommt gerade aus <b>${esc(S.data.live.symbol||"der Brücke")}</b>,
+         letzter Tick vor ${Math.round(S.data.live.tick_age||0)} Sekunden.`
+      : `Der Chart hängt gerade an der öffentlichen Cboe-Quelle, und die ist
+         <b>15 Minuten verzögert</b> — gemessen, nicht geschätzt: auch der
+         Cboe-Kurs selbst läuft den Kerzen nicht voraus. Eine kostenlose
+         Echtzeitquelle für den Nasdaq gibt es nicht.
+         <br><br>Deinen echten Kurs hat nur dein Broker. Die Brücke holt ihn
+         aus MetaTrader 5 auf deinem PC:
+         <b>bridge/START-BRUECKE.bat</b> doppelklicken, MT5 offen lassen —
+         dann steht hier LIVE und der Punkt oben wird grün.
+         <br><br>Der Server ist dafür schon eingerichtet und wartet.`}</div>`);
   $("spOpen").onclick = () => spaceSheet();
   $("sheetBody").querySelectorAll("[data-m]").forEach(el=>el.onclick=()=>switchMarket(el.dataset.m));
 };
