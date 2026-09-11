@@ -1,0 +1,343 @@
+# ChartTerminal Cloud
+
+Die Handy-Fassung des lokalen ChartTerminals. Laeuft ohne MetaTrader und
+ohne einen einzigen API-Key.
+
+## Warum das ueberhaupt geht
+
+Die Options- und Gamma-Haelfte des Originals haengt an `cboe_chain.py` —
+und der ruft seit jeher nur eine oeffentliche URL auf. Diese Fassung baut
+darauf auf und ersetzt nur die eine Schicht, die nicht mitkommt: MT5.
+
+| Schicht | Original | Hier |
+|---|---|---|
+| Optionskette, OI, Greeks | Cboe-CDN | **unveraendert** |
+| Kurse und Bars | MT5, Symbol `USTEC.c` | Cboe-Intraday, Yahoo als Historie |
+| News und Kalender | ForexFactory + 3 RSS | **unveraendert** |
+| Agent-Texte | Gemini | Gemini, sonst regelbasiert |
+
+## Der Nebeneffekt, der vier Blocker aufloest
+
+Cboe liefert die Minutenbars des **Index** — also denselben Preisraum, in
+dem auch die Strikes stehen. Damit gibt es keine Umrechnung mehr, und
+damit auch nicht:
+
+- den Basis-Jitter von ±170 Punkten aus `_fit_chart_mapping()`
+- die doppelte Kursumrechnung Strike → Future → MT5
+- die Frage "welcher NQ?" (Cash 29.179 / CFD 29.246 / Future 29.302)
+- das dreifache Zeitzonen-Durcheinander
+
+## Module
+
+| Datei | Aufgabe |
+|---|---|
+| `cboe.py` | Kette und Intraday-Bars vom Cboe-CDN, mit Stale-Cache |
+| `market.py` | Yahoo-Bars, ATR, Volumenprofil, Session-Marken, Bar-Kaskade |
+| `gex.py` | Waende, Zero-Gamma, Max Pain, Pin, Vanna, Charm, Verfallsleiter |
+| `walls.py` | Leading Walls ueber Index- und ETF-Kette, in einen Preisraum uebersetzt |
+| `walltrail.py` | Wand-Verlauf ueber die Sitzung - Datengrundlage der Orb-Ketten |
+| `zones.py` | Konfluenz-Zonen, `MERGE_ATR = 0.28` wie im Original |
+| `daybook.py` | Zonenbuch: Level am Tagesanker einfrieren, danach fortschreiben |
+| `news.py` | Wirtschaftskalender und gefilterte Schlagzeilen |
+| `agent.py` | 8 Ausloeser mit Abklingzeiten, Tagesplan, Budget-Waechter |
+| `store.py` | Zustandsspeicher: Postgres wenn `DATABASE_URL` gesetzt, sonst Datei |
+| `keepalive.py` | Wachhalten nur waehrend der Handelszeit |
+| `server.py` | Flask, Endpunkte, Hintergrund-Scanner |
+| `static/index.html` | Handy-Oberflaeche im Redesign-Look vom 03.09. |
+
+## Fixe Level
+
+Ohne Einfrieren wandert jede Wand mit jedem Snapshot — und ein Level, das
+sich staendig verschiebt, laesst sich weder handeln noch messen. `daybook.py`
+uebernimmt die Mechanik aus `_zone_day_book()`:
+
+- **Anker** um `ANCHOR_HOUR` (Standard 6:00 UTC). Vor dem Anker zaehlt noch
+  der Vortag.
+- **Einfrieren** von Call-/Put-Waenden samt Leiter, Zero-Gamma, Max Pain und
+  Gamma-Pin. Danach bleiben diese Zahlen den Tag ueber stehen.
+- **Drift** gegen den laufenden Stand wird mitgefuehrt und im Chart als
+  Geisterlinie gezeichnet — man sieht, wohin die Wand seit dem Anker lief.
+- **Zustaende** `ungetestet -> im Test -> gehalten | gebrochen`. Bruch ist
+  Akzeptanz jenseits der Kante (0,15 ATR), nicht blosse Beruehrung.
+- **Anti-Zappel-Regel**: ein an der Kante zappelnder Kurs erzeugt eine
+  Beruehrungs-Episode, nicht dreissig (600 s Abstand).
+- **Identitaet ueber Tage**: ein Level behaelt seine ID, solange sein Strike
+  wiederkehrt. Der Pruefungszaehler laeuft weiter — die Voraussetzung fuer
+  "siebter Test" und "nie drin gewesen".
+- **Qualitaetssperre**: ist die Kette faul, bleibt das alte Buch stehen,
+  statt ein neues zu wuerfeln.
+
+## Volumenprofil
+
+**Die Quelle.** Der Index selbst wird nicht gehandelt und hat kein
+Volumen. Fuer ein Volumenprofil braucht es gehandeltes Volumen, und das
+liegt im Future: `NQ=F` traegt bei Yahoo das CME-Handelsvolumen je
+Kerze. Die Future-Preise werden ueber ein einziges Verhaeltnis in den
+Index-Preisraum gehoben, damit Profil, Kerzen und Strikes auf derselben
+Achse bleiben. Faellt der Future aus, tritt das Optionsvolumen der Kette
+an; fehlt auch das, zaehlt das Profil Zeit je Preis. Die Kopfzeile
+benennt, welcher der drei Faelle gerade gilt.
+
+**Die Verteilung.** Volumen gleichmaessig ueber die Kerzenspanne zu
+verteilen IST die TPO-Rechnung - sie zaehlt, welche Preise beruehrt
+wurden, und macht aus jedem Gewicht wieder Zeit je Preis. Deshalb faellt
+der groessere Teil (72 %) auf den Koerper zwischen Eroeffnung und
+Schluss, der Rest auf die Dochte. Eine Naeherung; exakt ginge es nur mit
+Tickdaten.
+
+**Die Aufloesung.** Das Profil rechnet immer auf Minutenkerzen,
+unabhaengig von der angezeigten Zeitebene. Gemessen an derselben
+Sitzung: mittlere Kerzenspanne 6,7 statt 22,1 Punkte, Value Area
+**42 statt 97 Punkte**. Aus 5-Minuten-Kerzen war sie mehr als doppelt
+so breit, wie sie ist - reine Verschmierung innerhalb der Kerze.
+
+180 Bins statt 90, und zweigeteilt: Cboe liefert je Minute getrennt
+Call- und Put-Volumen. Ein Preisband, an dem fast nur Puts liefen,
+bedeutet etwas anderes als eines mit ueberwiegend Calls - auch bei
+gleicher Summe. Jeder Balken faerbt sich deshalb zwischen Tuerkis
+(Put-lastig) und Gold (Call-lastig), statt einheitlich grau zu bleiben.
+
+Gemessen am POC einer Sitzung: **37 Prozent Call gegen 63 Prozent Put** -
+an dieser Marke wurde ueberwiegend auf der Put-Seite gehandelt.
+
+Die **Value Area** liegt als getoentes Band ueber der ganzen Chartbreite,
+mit VAH und VAL als gestrichelten Kanten. Sie ist eine Aussage ueber den
+Kursbereich, nicht ueber den Profilstreifen: hier liefen 70 Prozent des
+Volumens, und der Kurs kehrt ueberdurchschnittlich oft dorthin zurueck.
+
+Das Weinrot ist bewusst dunkler und weniger gesaettigt als das Signalrot
+der Zustandsfarbe - beide muessen nebeneinander bestehen koennen.
+
+Dazu markiert: POC als Linie mit Beschriftung,
+HVN-Knoten als Strich am linken Rand, LVN-Vakuum gestrichelt. Knoten
+sind lokale Maxima ueber dem 1,4-fachen Mittel, Vakuum lokale Minima
+unter dem 0,45-fachen.
+
+## Leading Walls und Orb-Ketten
+
+Ein Index hat zwei Ketten, die dieselbe Sache meinen: NDX und QQQ, SPX
+und SPY. Beide tragen echte Bestaende auf verschiedenen Rastern. Der
+ETF-Strike wird ueber das Verhaeltnis der beiden Spotkurse in den
+Index-Preisraum uebersetzt - beide Kurse zum selben Zeitpunkt aus
+derselben Quelle, keine Futures-Basis noetig.
+
+Das lohnt sich: **bei NDX traegt QQQ rund das Hundertfache an Open
+Interest** (227.000 gegen 2.400 Kontrakte auf der staerksten Put-Wand).
+Wer nur die Index-Kette liest, sieht die eigentliche Positionierung nicht.
+
+Rangfolge nach Open Interest, **nicht nach Gamma**. Gamma ist per
+Konstruktion am Geld maximal; danach zu ranken erzeugt die ATM-Artefakte,
+an denen die Zonen-Engine des Originals gelitten hat.
+
+### Die Ketten im Chart
+
+Cboe liefert immer nur den aktuellen Bestand. `walltrail.py` schreibt
+deshalb je 120 Sekunden eine Stuetzstelle mit, und das Frontend zeichnet
+daraus **Orb-Ketten**: x ist die Zeit, y der Preis, der Radius der
+Bestand. Eine Linie sagt, wo die Wand liegt - die Kette sagt zusaetzlich,
+ob sie waechst oder zerfaellt.
+
+- Gold = Call-Seite, Violett = Put-Seite (dieselben Farben wie ueberall)
+- Jeder Orb ist ein vorgezeichnetes Sprite mit Leuchtkern; bei ueber tausend
+  Punkten je Bild waere ein radialer Verlauf pro Punkt zu teuer
+- Ein Ring um den Orb heisst: aus der Index-Kette, nicht aus der ETF-Kette
+- Ohne Datenbank ist die Kette nach jedem Neustart leer
+
+Level ausserhalb des Sichtfensters erscheinen als **Randmarken** am
+rechten Rand statt die Skala aufzuziehen - sonst staucht eine Wand
+zwei Prozent entfernt die Kerzen zu einem Strich.
+
+## Zeichenschicht
+
+- **Geraetefaktor bis 3.** Ein iPhone Pro zeichnet damit auf dem echten
+  Panelraster - 1170x1914 Canvas-Pixel statt 780x1276.
+- **Linien auf dem Geraetepixel.** Ein halbes CSS-Pixel ist bei Faktor 3
+  kein halbes Geraetepixel; ohne Rasterung franst jede 1px-Linie grau aus.
+- **Orb-Sprites** je Farbe und gerasterter Groesse, danach nur kopiert.
+- Kerzenkoerper mit leichtem Verlauf, Grund mit Verlauf, Vignette an den
+  Raendern - Tiefe ohne eine zweite Farbe.
+- Kurse zaehlen weich auf den neuen Wert, statt zu springen.
+
+## Platz fuer den Chart
+
+Gestapelte Leisten kosteten 180 von 844 Punkten - ein Fuenftel des
+Bildschirms. Kopfzeile und Marktleiste schweben jetzt ueber dem Chart
+statt ihn nach unten zu druecken, mit Weichzeichner und Verlauf
+darunter, damit er lesbar bleibt. **Der Chart nimmt 93 statt 56 Prozent
+der Bildhoehe ein.**
+
+Dazu zwei Mechaniken aus Feed-Apps:
+
+- **Einklappen bei Beruehrung.** Waehrend einer Geste faehrt die
+  Marktleiste hoch und kommt 1,3 Sekunden danach zurueck.
+- **Vollbild** ueber den Knopf in der Zeitebenen-Leiste: Kopfzeile,
+  Marktleiste und Navigation verschwinden, der Chart bekommt alles.
+
+Die Preisskala ist hart geklemmt: ein Level darf sie um hoechstens ein
+Viertel der Kerzenspanne je Seite aufziehen. Damit gehoeren den Kerzen
+immer mindestens zwei Drittel des Bildes; was weiter weg liegt, sagt
+die Randmarke.
+
+## Farbsystem
+
+Jede Farbe hat genau eine Aufgabe. Das ist der ganze Trick - vorher
+stand Tuerkis fuer Put-Waende, fuer "Regime long", fuer steigende Kurse
+und fuer den Agenten, also fuer vier Dinge gleichzeitig.
+
+**Daten - was ein Level bedeutet**
+
+| Farbe | | Bedeutung |
+|---|---|---|
+| `#E0A93C` | Gold | Call-Seite, Widerstand |
+| `#A97BE8` | Violett | Put-Seite, Support |
+| `#CFC6B2` | Bein | Pivot: Zero-Gamma, Max Pain, Gamma-Pin |
+| `#5B6A7D` | Schiefer | Struktur: POC, Vortagesmarken |
+| `#9E4756` | Weinrot | Value Area: wo 70 % des Volumens liefen |
+
+**Stimme** — `#46C4BC` Tuerkis, allein fuer den Agenten. Erscheint nie
+an einem Level.
+
+**Zustand** — `#4FB477` und `#E5705A` fuer Regime, Kursveraenderung und
+Frische. Bewusst getrennt von den Datenfarben: sonst leuchtet "LONG"
+wie eine Put-Wand.
+
+**Kerzen** bleiben neutral (`#C2CBD6` / `#4A5563`). Traegt der Kurs
+selbst Farbe, konkurriert er mit den Overlays.
+
+Die Farbe folgt der **Art** des Levels, nicht seiner Lage: eine
+Call-Wand bleibt Gold, auch wenn der Kurs darueber steigt. Vorher
+faerbte die Lage - dann leuchtete das Zero-Gamma wie eine Put-Wand und
+behauptete etwas, das es nicht ist.
+
+## Bedienung
+
+Aufbau wie eine Social-App, weil ein Telefon einhaendig bedient wird:
+
+- **Bottom-Navigation** mit fuenf Ansichten — Chart, Level, Gamma, Agent,
+  Plan. Alles im Daumenbereich, Ziele mindestens 44 px.
+- **Wischen** zwischen den Ansichten (Scroll-Snap). Auf dem Chart selbst
+  schiebt und zoomt die Geste stattdessen den Kurs.
+- **Marktleiste** oben: alle fuenf Maerkte mit Kurs und Tagesveraenderung,
+  antippen wechselt. Speist sich aus dem Intraday-Endpunkt (100 KB je Markt)
+  statt aus den vollen Ketten (6 MB).
+- **Sheets von unten** fuer Markt und Chart-Ebenen statt Menues in der Mitte.
+- **Langes Druecken** im Chart blendet ein Fadenkreuz mit OHLC ein.
+- Die Werkzeugleiste des Originals hatte 16 Haekchen nebeneinander; hier
+  sind es zwei Menues und eine Chip-Reihe.
+
+## Endpunkte
+
+```
+GET  /                      Oberflaeche
+GET  /health                Status, aktive Maerkte, Budget
+GET  /api/markets           NQ · ES · YM · RTY · GC
+GET  /api/state?market=NQ&tf=15m
+GET  /api/candles?market=NQ&tf=15m
+GET  /api/agent/messages?market=NQ
+POST /api/agent/chat        {"market":"NQ","text":"..."}
+GET  /api/agent/plan?market=NQ
+GET  /api/book?market=NQ    fixe Level mit Zustand und Drift
+GET  /api/overview          alle Maerkte mit Kurs und Tagesveraenderung
+```
+
+## Auf dem Telefon installieren
+
+Es gibt **kein APK** — das hier ist eine Web-App. Nach dem Deployment
+verhaelt sie sich aber wie eine installierte App: `manifest.webmanifest`
+setzt Vollbild, Icon und Startfarbe.
+
+- **iPhone (Safari):** Teilen -> "Zum Home-Bildschirm"
+- **Android (Chrome):** Menue -> "App installieren"
+
+Danach startet sie ohne Browser-Leiste, mit eigenem Icon.
+
+## Lokal starten
+
+```bash
+pip install -r requirements.txt
+python -m terminal.server          # http://localhost:8770
+```
+
+## Auf Render
+
+`render.yaml` bringt den Dienst `chartterminal` mit. **Genau ein Worker** —
+sonst laeuft der Beobachtungs-Thread mehrfach und meldet doppelt.
+
+Optional im Dashboard: `GEMINI_API_KEY`. Ohne Key antwortet der Agent aus
+Vorlagen; jede Zahl stammt dann zwingend aus der Engine, keine kann
+erfunden werden.
+
+## Kosten
+
+Alles kostenlos, ohne Karte, ohne Testphase. Was der Dienst anfasst:
+
+| Bestandteil | Kosten | Grenze |
+|---|---|---|
+| Cboe-CDN (Ketten, Intraday) | 0 € | kein Key, kein erkennbares Limit |
+| Yahoo (Historie) | 0 € | drosselt stossweise mit 429, Ausweichkette faengt das |
+| ForexFactory + RSS | 0 € | kein Key |
+| Render Web Service | 0 € | 512 MB RAM, 750 Instanzstunden je Account |
+| Gemini (optional) | 0 € | dauerhaft freies Kontingent, ~1.500 Aufrufe/Tag |
+
+Gemessener Spitzenverbrauch mit allen fuenf Maerkten im Cache: **158 MB**.
+Das passt in die 512 MB des Free-Plans.
+
+### Die Stundenrechnung
+
+750 Instanzstunden gelten fuer den **ganzen Account**, ein Monat hat 744.
+Ein einziger rund um die Uhr wachgehaltener Dienst braucht also alles auf -
+und `pixelmind-backend` im selben Account ginge leer aus.
+
+Deshalb haelt `keepalive.py` den Dienst nur waehrend der Handelszeit wach
+(12-21 Uhr UTC, werktags): rund **198 Stunden im Monat**. Ausserhalb
+schlaeft er und wacht beim ersten Aufruf in etwa 50 Sekunden auf.
+
+### Zustand ueber Neustarts hinweg
+
+Der Free-Plan hat keine persistente Festplatte. Ohne Datenbank waeren
+Zonenbuch, Chat-Verlauf und Tagesplan bei jedem Neustart weg - und der
+Pruefungszaehler ueber Tage waere in Wahrheit "seit dem letzten Neustart".
+
+`store.py` legt den Zustand deshalb in Postgres ab, sobald `DATABASE_URL`
+gesetzt ist. Ohne die Variable bleibt es beim Dateiverhalten, damit lokales
+Entwickeln keine Datenbank braucht.
+
+**Einrichtung bei Neon** (kostenlos, ohne Karte):
+
+1. neon.com -> Anmelden -> Projekt anlegen
+2. Die angebotene Connection String kopieren
+   (`postgresql://user:pass@ep-....neon.tech/neondb?sslmode=require`)
+3. In Render: Service `chartterminal` -> Environment -> `DATABASE_URL` einfuegen
+4. Nach dem Neustart meldet `/health` unter `store` den Eintrag
+   `"backend": "postgres"`
+
+Die Tabelle legt der Dienst selbst an - ein einziges Key-Value-Schema:
+
+```sql
+CREATE TABLE terminal_state (
+  key        TEXT PRIMARY KEY,
+  value      JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+Neon faehrt kostenlose Instanzen nach kurzer Ruhe herunter und beim
+naechsten Zugriff wieder hoch. `store.py` verbindet deshalb je Vorgang
+frisch und wiederholt einen ersten Fehlschlag - der Weckvorgang selbst
+darf keinen Datenverlust verursachen.
+
+## Was diese Fassung bewusst nicht kann
+
+- **Kein Entry-Timing.** Der Cboe-Feed haengt gemessene 15 bis 16 Minuten
+  zurueck. Fuer Zonen und Waende folgenlos, fuers Timing unbrauchbar.
+- **Keine gemessenen Vorzeichen.** Calls positiv, Puts negativ ist eine
+  Annahme. Ohne Fluss-Klassifikation aus zwei Snapshots ist das
+  Dealer-Delta-Notional `F(S)` monoton und hat kein Extremum — deshalb
+  wird es hier gar nicht erst als Level ausgewiesen.
+- **Kein Gameplan.** Rollen, Namensgrammatik und das Level-Buch ueber
+  Wochen sind im Original geplant, hier nicht gebaut.
+- **Kein Backtest, keine TerminalMap, keine Strike-Map.**
+- **Zustand ist fluechtig.** Auf dem Free-Plan verliert der Container
+  Chat-Verlauf, Zonenbuch und Tagesplan beim Neustart. Damit faellt auch
+  der Pruefungszaehler ueber Tage — er braucht einen persistenten Speicher,
+  um sein Versprechen zu halten.

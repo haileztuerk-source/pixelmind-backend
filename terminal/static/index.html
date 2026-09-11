@@ -1,0 +1,3002 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0A0C11">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ChartTerminal">
+<link rel="manifest" href="/manifest.webmanifest">
+<script>
+// Ohne registrierten Service Worker bietet Chrome auf Android die
+// Installation nicht an - Manifest und Icons allein genuegen nicht.
+if ("serviceWorker" in navigator)
+  addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(()=>{}));
+</script>
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" href="/icon-192.png">
+<title>ChartTerminal</title>
+<style>
+/* Rollenfarben statt Quellfarben — Redesign 03.09.
+   Gold = Widerstand, Türkis = Support, Beige = Pivot, Violett = Agent.
+   Woher ein Level stammt, steht im Text, nie in der Farbe. */
+:root{
+  /* ── Grund ─────────────────────────────────────────────────────────
+     Nahezu neutrales Schwarz mit minimalem Kaelteanteil. Die Flaeche
+     traegt keine Bedeutung, damit die Overlays sie tragen koennen. */
+  --ground:#0A0C11; --panel:#11141B; --panel-2:#161A22; --panel-3:#1D222C;
+  --line:#28303C; --line-soft:#1C222B;
+  --ink:#ECEFF4; --ink-dim:#8B97A8; --ink-faint:#5A6675;
+
+  /* ── Daten: was ein Level bedeutet ─────────────────────────────────
+     Gold und Violett wie in der Vorlage. Jede dieser Farben steht fuer
+     eine Seite des Marktes und fuer nichts anderes. */
+  --resist:#E0A93C;   /* Call-Seite, Widerstand */
+  --support:#A97BE8;  /* Put-Seite, Support */
+  --pivot:#CFC6B2;    /* Pivot, Zero-Gamma, Max Pain */
+  --struct:#5B6A7D;   /* Struktur: POC, Vortagesmarken */
+  --va:#9E4756;       /* Value Area: wo 70 % des Volumens liefen */
+
+  /* ── Stimme ────────────────────────────────────────────────────────
+     Der Agent bekommt das freigewordene Tuerkis. Kuehl, klar von Gold
+     und Violett getrennt, und nie an einem Level. */
+  --agent:#46C4BC;
+
+  /* ── Zustand: kein Datum, sondern eine Lage ────────────────────────
+     Regime, Kursveraenderung, Frische. Bewusst getrennt von den
+     Datenfarben, damit "LONG" nicht wie eine Put-Wand aussieht. */
+  --pos:#4FB477; --neg:#E5705A;
+  --live:#4FB477; --warn:#E5705A;
+
+  /* ── Kerzen ────────────────────────────────────────────────────────
+     Neutral gehalten. Traegt der Kurs selbst Farbe, konkurriert er mit
+     den Overlays - dasselbe macht die Vorlage. */
+  --up:#C2CBD6; --down:#4A5563;
+
+  --mono:ui-monospace,"SF Mono","IBM Plex Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --st:env(safe-area-inset-top,0px);
+  --sb:env(safe-area-inset-bottom,0px);
+  --tabh:56px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overscroll-behavior:none}
+body{
+  margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+  font-size:15px;line-height:1.45;overflow:hidden;display:flex;flex-direction:column;
+  -webkit-font-smoothing:antialiased;user-select:none;-webkit-user-select:none;
+}
+button{font:inherit;color:inherit;background:none;border:none;padding:0;cursor:pointer}
+.tnum{font-variant-numeric:tabular-nums}
+:focus-visible{outline:2px solid var(--resist);outline-offset:2px;border-radius:6px}
+
+/* ============ Kopfzeile ============ */
+.topbar{
+  position:fixed;top:0;left:0;right:0;z-index:32;
+  padding:calc(var(--st) + 9px) 14px 9px;display:flex;align-items:center;gap:11px;
+  background:color-mix(in srgb, var(--ground) 82%, transparent);
+  backdrop-filter:blur(16px) saturate(1.3);-webkit-backdrop-filter:blur(16px) saturate(1.3);
+  transition:transform .24s cubic-bezier(.32,.72,0,1), opacity .2s ease;
+}
+/* Verlauf unter der Chrome: der Chart laeuft darunter weiter und bleibt
+   trotzdem lesbar - dieselbe Loesung wie in Vollbild-Feeds. */
+.topbar::after{
+  content:"";position:absolute;left:0;right:0;top:100%;height:22px;pointer-events:none;
+  background:linear-gradient(color-mix(in srgb,var(--ground) 70%,transparent), transparent);
+}
+body.immersive .topbar,body.immersive .strip,body.immersive .tabbar{
+  transform:translateY(var(--hide,-110%));opacity:0;pointer-events:none;
+}
+body.immersive .tabbar{--hide:110%}
+.strip.tucked{transform:translateY(calc(-100% - var(--topbar-h,62px)));opacity:0}
+
+/* Der Griff steht dort, wo die Leiste war. Er ist die Spur, ohne die
+   eine weggeklappte Flaeche verloren waere - vier sichtbare Bildpunkte
+   auf einem Tippziel von 44. */
+.striphandle{
+  /* Ueber der Leiste (31), nicht darunter: mit z-index 30 lag der Griff
+     hinter der Zeichenflaeche und war nicht antippbar. */
+  position:fixed;top:var(--topbar-h,62px);left:0;right:0;z-index:32;
+  height:22px;display:flex;align-items:center;justify-content:center;
+  background:none;border:none;padding:0;
+  animation:handleIn .22s ease-out;
+}
+.striphandle i{
+  /* Nicht --line: das ist eine Trennlinienfarbe und auf dem fast
+     schwarzen Chartgrund gemessen unsichtbar (#28303C auf #0A0C11).
+     Ein Griff, den man nicht sieht, ist kein Griff. */
+  width:36px;height:4px;border-radius:2px;display:block;
+  background:var(--ink-faint);opacity:.75;
+  box-shadow:0 0 0 4px color-mix(in srgb, var(--ground) 70%, transparent);
+}
+.striphandle:active i{background:var(--resist)}
+@keyframes handleIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+.idbtn{display:flex;align-items:center;gap:5px;min-height:44px;padding-right:6px}
+.idbtn .nm{font-size:19px;font-weight:800;letter-spacing:-.02em}
+.idbtn .car{color:var(--ink-faint);font-size:11px;margin-top:2px}
+.price-wrap{margin-left:auto;text-align:right;line-height:1.2}
+.price{font-family:var(--mono);font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+.chg{font-family:var(--mono);font-size:11.5px;font-variant-numeric:tabular-nums;color:var(--ink-dim)}
+.chg.up{color:var(--pos)} .chg.dn{color:var(--neg)}
+.rg{
+  display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:700;
+  padding:4px 9px;border-radius:20px;border:1px solid var(--line);color:var(--ink-dim);
+  letter-spacing:.02em;white-space:nowrap;
+}
+.rg.long{color:var(--pos);border-color:rgba(79,180,119,.42);background:rgba(79,180,119,.11)}
+.rg.short{color:var(--neg);border-color:rgba(229,112,90,.42);background:rgba(229,112,90,.11)}
+.rg i{width:5px;height:5px;border-radius:50%;background:currentColor}
+
+/* ============ Marktleiste ============
+   Zwei Stufen. Eingeklappt eine schmale Zeile, die die Werte nur zeigt;
+   aufgeklappt die ausfuehrlichen Karten. Gemessen kostete die Leiste in
+   der alten Form 89 von 915 Bildpunkten - fast ein Zehntel des Bildes
+   fuer Zahlen, die man meistens nur streift. */
+.strip{
+  position:fixed;top:var(--topbar-h,62px);left:0;right:0;z-index:31;
+  display:flex;align-items:flex-start;gap:4px;padding:6px 4px 6px 12px;
+  background:color-mix(in srgb, var(--ground) 76%, transparent);
+  backdrop-filter:blur(16px) saturate(1.3);-webkit-backdrop-filter:blur(16px) saturate(1.3);
+  transition:transform .28s cubic-bezier(.32,.72,0,1), opacity .2s ease;
+}
+.striprow{
+  flex:1 1 auto;min-width:0;display:flex;gap:7px;
+  overflow-x:auto;scrollbar-width:none;
+}
+.striprow::-webkit-scrollbar{display:none}
+.stripx{
+  flex:none;width:40px;height:34px;border-radius:10px;border:1px solid var(--line-soft);
+  background:var(--panel-2);color:var(--ink-faint);font-size:13px;line-height:1;
+  transition:transform .22s cubic-bezier(.32,.72,0,1);
+}
+.strip.full .stripx{transform:rotate(180deg)}
+
+/* Eingeklappt: eine Zeile, nur lesen und antippen.
+   Die Veraenderung steht nicht als eigene Zahl daneben, sondern faerbt
+   den Kurs. Ausgeschrieben brauchte ein Wert 140 Bildpunkte und es
+   passten zweieinhalb in die Zeile - als Farbe sind es 90 und vier. Die
+   Richtung ist damit weiter da, sie kostet nur keine Breite mehr. */
+.strip.slim .mchip{
+  flex:none;display:flex;align-items:baseline;gap:6px;height:34px;
+  padding:0 10px;border-radius:9px;background:var(--panel-2);
+  border:1px solid var(--line-soft);
+}
+.strip.slim .mchip .k{font-size:11px}
+.strip.slim .mchip .p{font-size:12.5px;margin:0}
+.strip.slim .mchip .c{display:none}
+.strip.slim .mchip.up .p{color:var(--pos)}
+.strip.slim .mchip.dn .p{color:var(--neg)}
+
+/* Aufgeklappt: Karten wie bisher, umbrechend statt scrollend */
+.strip.full .striprow{flex-wrap:wrap;overflow:visible}
+.strip.full .mchip{
+  flex:none;min-width:86px;padding:8px 11px;border-radius:12px;background:var(--panel-2);
+  border:1px solid var(--line-soft);text-align:left;
+}
+.mchip.on{border-color:var(--resist);background:rgba(224,169,60,.11)}
+.mchip .k{font-size:11.5px;font-weight:700;color:var(--ink-dim)}
+.mchip.on .k{color:var(--resist)}
+.mchip .p{font-family:var(--mono);font-size:13px;font-weight:600;margin-top:2px;font-variant-numeric:tabular-nums}
+.mchip .c{font-family:var(--mono);font-size:10px;margin-top:1px;color:var(--ink-faint)}
+.mchip .c.up{color:var(--pos)} .mchip .c.dn{color:var(--neg)}
+
+/* ============ Ansichten ============ */
+.track{
+  flex:1 1 auto;min-height:0;display:flex;overflow-x:auto;overflow-y:hidden;
+  scroll-snap-type:x mandatory;scrollbar-width:none;overscroll-behavior-x:contain;
+}
+.track::-webkit-scrollbar{display:none}
+.view{
+  flex:none;width:100%;scroll-snap-align:start;overflow-y:auto;overscroll-behavior-y:contain;
+  -webkit-overflow-scrolling:touch;position:relative;
+}
+.view.chart{overflow:hidden}
+.pad{padding:calc(var(--chrome-h,124px) + 12px) 14px calc(20px + var(--sb))}
+
+/* Chart */
+.cvwrap{position:absolute;inset:0;touch-action:none}
+canvas{display:block;width:100%;height:100%}
+.meta{
+  position:absolute;left:8px;top:calc(var(--chrome-h,124px) + 6px);font-family:var(--mono);font-size:9.5px;
+  color:var(--ink-faint);line-height:1.4;pointer-events:none;white-space:nowrap;
+  background:color-mix(in srgb, var(--ground) 62%, transparent);
+  border:1px solid var(--line-soft);border-radius:7px;padding:3px 8px;font-size:9px;
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+}
+.tfbar{
+  position:absolute;left:0;right:0;bottom:8px;display:flex;gap:6px;align-items:center;
+  padding:0 10px;
+}
+/* Zeitebenen duerfen scrollen, die Werkzeuge nicht: sonst rutschen sie auf
+   schmalen Geraeten aus dem Bild und sind nur per Wischen erreichbar. */
+.tfscroll{
+  flex:1 1 auto;min-width:0;display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;
+  -webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 22px),transparent 100%);
+  mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 22px),transparent 100%);
+}
+.tfscroll::-webkit-scrollbar{display:none}
+.tficons{flex:none;display:flex;gap:6px}
+.tfc{
+  flex:none;min-width:44px;height:44px;padding:0 10px;border-radius:12px;
+  background:rgba(20,27,37,.92);border:1px solid var(--line);
+  font-family:var(--mono);font-size:12px;font-weight:600;color:var(--ink-dim);
+  display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px);
+}
+.tfc.on{background:var(--resist);border-color:var(--resist);color:#17130A}
+.tfc.icon{min-width:44px}
+
+.cross{
+  position:absolute;left:10px;top:10px;background:rgba(20,27,37,.95);border:1px solid var(--line);
+  border-radius:9px;padding:7px 10px;font-family:var(--mono);font-size:11px;line-height:1.6;
+  pointer-events:none;display:none;backdrop-filter:blur(8px);
+}
+.cross.on{display:block}
+
+/* ============ Karten ============ */
+.sec{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ink-faint);margin:20px 2px 9px}
+.sec:first-child{margin-top:2px}
+.card{
+  background:var(--panel-2);border:1px solid var(--line-soft);border-radius:13px;
+  padding:13px 14px;margin-bottom:9px;
+}
+.card.role{border-left:3px solid var(--c,var(--line))}
+.ch{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.ch b{font-family:var(--mono);font-size:16px;font-weight:700;font-variant-numeric:tabular-nums}
+.ch .tag{font-size:10px;font-weight:700;letter-spacing:.04em;padding:3px 7px;border-radius:6px;
+  background:var(--panel-3);color:var(--ink-dim)}
+.ch .tag.held{background:rgba(79,180,119,.16);color:var(--pos)}
+.ch .tag.broken{background:rgba(229,112,90,.16);color:var(--neg)}
+.ch .tag.tested{background:rgba(217,164,65,.16);color:var(--resist)}
+.ch .far{margin-left:auto;font-family:var(--mono);font-size:12.5px;color:var(--ink-dim);
+  font-variant-numeric:tabular-nums}
+.cs{font-size:12.5px;color:var(--ink-dim);margin-top:6px;line-height:1.5}
+.cm{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);margin-top:6px;
+  display:flex;gap:10px;flex-wrap:wrap}
+.empty{color:var(--ink-faint);font-size:13px;text-align:center;padding:38px 20px;line-height:1.6}
+
+/* Kennzahlen-Raster */
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:4px}
+.tile{background:var(--panel-2);border:1px solid var(--line-soft);border-radius:13px;padding:12px 13px}
+.tile .l{font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-faint)}
+.tile .v{font-family:var(--mono);font-size:19px;font-weight:700;margin-top:5px;font-variant-numeric:tabular-nums}
+.tile .n{font-size:11px;color:var(--ink-dim);margin-top:4px;line-height:1.4}
+
+/* Balkenzeilen */
+.brow{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line-soft)}
+.brow:last-child{border-bottom:none}
+.brow .k{font-family:var(--mono);font-size:13px;font-weight:700;min-width:66px;font-variant-numeric:tabular-nums}
+.brow .bar{flex:1;height:9px;background:var(--panel-3);border-radius:3px;overflow:hidden}
+.brow .bar i{display:block;height:100%;background:var(--c,var(--line));border-radius:3px}
+.brow .v{font-family:var(--mono);font-size:11.5px;color:var(--ink-dim);min-width:54px;text-align:right}
+
+/* Agent */
+.msg{padding:12px 13px;border-radius:13px;margin-bottom:10px;font-size:13.5px;line-height:1.55}
+.msg .mh{font-family:var(--mono);font-size:9.5px;margin-bottom:6px;display:flex;gap:8px;align-items:center;
+  letter-spacing:.05em}
+.msg .mh .ts{margin-left:auto;color:var(--ink-faint)}
+.msg.proactive{background:var(--panel-2);border-left:3px solid var(--agent)}
+.msg.proactive .mh{color:var(--agent)}
+.msg.user{background:rgba(224,169,60,.10);border:1px solid rgba(224,169,60,.28);margin-left:30px}
+.msg.user .mh{color:var(--resist)}
+.msg.agent{background:var(--panel-2);border-left:3px solid var(--line)}
+.msg.agent .mh{color:var(--ink-faint)}
+.msg .why{font-size:11px;color:var(--ink-faint);margin-top:7px;font-style:italic}
+.composer{
+  position:sticky;bottom:0;display:flex;gap:8px;padding:10px 0 calc(4px + var(--sb));
+  background:linear-gradient(transparent,var(--ground) 22%);
+}
+.composer input{
+  flex:1;min-width:0;height:44px;background:var(--panel-2);border:1px solid var(--line);
+  border-radius:22px;padding:0 16px;color:var(--ink);font-size:15px;user-select:text;
+}
+.composer button{
+  height:44px;padding:0 18px;border-radius:22px;background:var(--resist);color:#17130A;
+  font-size:14px;font-weight:700;
+}
+.composer button:disabled{opacity:.4}
+
+/* Plan */
+.plan h4{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--resist);margin:20px 0 8px}
+.plan h4:first-child{margin-top:0}
+.plan p{font-size:13.5px;line-height:1.62;margin:0 0 8px}
+.plan ul{margin:0;padding-left:18px}
+.plan li{font-size:13.5px;line-height:1.6;margin-bottom:7px}
+.plan .hint{margin:6px 0 2px;padding:9px 11px;border-radius:9px;
+  background:var(--panel-2);border:1px solid var(--line-soft);
+  font-size:11px;color:var(--ink-faint);line-height:1.5}
+.bias{display:inline-block;font-size:12px;font-weight:700;background:rgba(224,169,60,.13);
+  border:1px solid rgba(224,169,60,.35);color:var(--resist);padding:6px 12px;border-radius:9px;margin-bottom:9px}
+.upd{border-left:3px solid var(--agent);background:var(--panel-2);border-radius:0 10px 10px 0;
+  padding:11px 13px;margin-top:9px;font-size:13px;line-height:1.55}
+.upd .t{font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-bottom:5px}
+.foot{font-size:11px;color:var(--ink-faint);line-height:1.55;margin-top:16px;padding-top:12px;
+  border-top:1px solid var(--line-soft)}
+
+/* ============ Bottom-Navigation ============ */
+.tabbar{
+  flex:none;display:flex;background:var(--panel);border-top:1px solid var(--line-soft);
+  padding-bottom:var(--sb);
+}
+.tb{
+  flex:1;height:var(--tabh);display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:3px;color:var(--ink-faint);position:relative;
+}
+.tb svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.7;
+  stroke-linecap:round;stroke-linejoin:round}
+.tb span{font-size:9.5px;font-weight:600;letter-spacing:.02em}
+.tb.on{color:var(--resist)}
+.tb .badge{position:absolute;top:7px;right:calc(50% - 17px);width:7px;height:7px;
+  border-radius:50%;background:var(--agent);border:1.5px solid var(--panel)}
+
+/* ============ Sheets ============ */
+.scrim{position:fixed;inset:0;background:rgba(4,7,11,.62);z-index:80;opacity:0;
+  pointer-events:none;transition:opacity .2s ease}
+.scrim.on{opacity:1;pointer-events:auto}
+.sheet{
+  position:fixed;left:0;right:0;bottom:0;z-index:90;background:var(--panel-2);
+  border-radius:20px 20px 0 0;border-top:1px solid var(--line);
+  transform:translateY(100%);transition:transform .26s cubic-bezier(.32,.72,0,1);
+  max-height:82vh;overflow-y:auto;padding-bottom:calc(12px + var(--sb));
+}
+.sheet.on{transform:translateY(0)}
+.grabzone{padding:10px 0 6px;cursor:grab;touch-action:none}
+.grab{width:44px;height:5px;border-radius:3px;background:var(--line);margin:0 auto}
+.sh-head{display:flex;align-items:center;padding:0 18px 4px}
+.sh-close{
+  margin-left:auto;width:44px;height:44px;border-radius:22px;background:var(--panel-3);
+  border:1px solid var(--line);color:var(--ink-dim);font-size:15px;line-height:1;
+  display:flex;align-items:center;justify-content:center;
+}
+.sh-t{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-faint);padding:8px 18px 4px}
+.si{display:flex;align-items:center;gap:13px;padding:15px 18px;min-height:56px;
+  border-top:1px solid var(--line-soft);font-size:15px}
+.si .box{width:20px;height:20px;border-radius:6px;border:2px solid var(--ink-faint);flex:none;
+  display:flex;align-items:center;justify-content:center}
+.si.on .box{background:var(--resist);border-color:var(--resist)}
+.si.on .box::after{content:"";width:9px;height:5px;border-left:2px solid #17130A;
+  border-bottom:2px solid #17130A;transform:rotate(-45deg) translate(1px,-1px)}
+.si .sub{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--ink-faint)}
+.si.sel{color:var(--resist);font-weight:600}
+.sh-n{padding:13px 18px;font-size:11.5px;color:var(--ink-faint);line-height:1.55;
+  border-top:1px solid var(--line-soft)}
+
+/* Live-Punkt: gruen heisst Bruecke laeuft, grau heisst verzoegert */
+.livedot{width:7px;height:7px;border-radius:50%;display:inline-block;
+  margin:0 2px 0 6px;vertical-align:middle;background:var(--down)}
+.livedot.on{background:var(--pos);box-shadow:0 0 0 0 rgba(79,180,119,.55);
+  animation:lvp 2.4s ease-out infinite}
+@keyframes lvp{0%{box-shadow:0 0 0 0 rgba(79,180,119,.5)}
+  70%{box-shadow:0 0 0 7px rgba(79,180,119,0)}
+  100%{box-shadow:0 0 0 0 rgba(79,180,119,0)}}
+
+/* Naechste Annaeherung: Farbe nach Abstand in ATR */
+.near{padding:7px 13px 0;font-size:11px;color:var(--ink-faint);
+  font-family:var(--mono);line-height:1.5}
+.near b{color:var(--ink-dim);font-weight:600}
+.near.hit{color:var(--pos)} .near.hit b{color:var(--pos)}
+.near.hot b{color:var(--resist)}
+.near.cold{opacity:.6}
+
+/* Preisraum messen */
+.sp-row{display:flex;align-items:center;gap:12px;padding:11px 18px;
+  border-top:1px solid var(--line-soft)}
+.sp-row label{font-size:13px;color:var(--ink-dim);min-width:104px}
+.sp-row input{flex:1;min-width:0;background:var(--panel-3);color:var(--ink);
+  border:1px solid var(--line);border-radius:10px;padding:12px 13px;
+  font-family:var(--mono);font-size:16px;   /* 16px: iOS zoomt darunter hinein */
+  -webkit-appearance:none}
+.sp-row input:focus{outline:none;border-color:var(--resist)}
+.sp-btns{display:flex;gap:10px;padding:14px 18px}
+.sp-b{flex:1;min-height:48px;border-radius:12px;border:1px solid var(--line);
+  background:var(--panel-3);color:var(--ink);font-size:14px;font-weight:600}
+.sp-b.prim{background:var(--resist);border-color:var(--resist);color:#1A1206}
+
+/* Aktualisieren */
+.refresh{
+  position:absolute;left:50%;top:6px;transform:translateX(-50%);z-index:5;
+  font-size:11px;color:var(--ink-faint);font-family:var(--mono);opacity:0;transition:opacity .2s
+}
+.refresh.on{opacity:1}
+
+/* ---------- Tiefe und Rueckmeldung ---------- */
+.card{
+  background:linear-gradient(180deg,var(--panel-2),color-mix(in srgb,var(--panel-2) 88%, #000));
+  box-shadow:0 1px 0 rgba(255,255,255,.03) inset, 0 6px 18px -12px rgba(0,0,0,.8);
+}
+.tile{
+  background:linear-gradient(180deg,var(--panel-2),color-mix(in srgb,var(--panel-2) 90%, #000));
+  box-shadow:0 1px 0 rgba(255,255,255,.03) inset;
+}
+.topbar{box-shadow:0 1px 0 rgba(255,255,255,.02) inset}
+.tabbar{box-shadow:0 -8px 22px -18px rgba(0,0,0,.9)}
+
+/* Druck sichtbar machen - ein Ziel, das nachgibt, fuehlt sich verlaesslich an */
+.tb:active,.mchip:active,.tfc:active,.pill:active,.si:active{transform:scale(.965)}
+.tb,.mchip,.tfc,.si{transition:transform .09s ease, color .15s ease, background .15s ease}
+.card{transition:transform .09s ease}
+.card:active{transform:scale(.99)}
+
+/* Aktiver Reiter bekommt einen Lichtpunkt statt nur Farbe */
+.tb.on::before{
+  content:"";position:absolute;top:5px;width:16px;height:2px;border-radius:2px;
+  background:var(--resist);box-shadow:0 0 8px var(--resist);
+}
+
+/* Ladezustand: Platzhalter in der Form des Inhalts statt "lädt…" */
+.livedot.shut{background:var(--ink-faint);box-shadow:none}
+.skel{padding:14px 0}
+.skel i{
+  display:block;height:58px;border-radius:13px;margin-bottom:9px;
+  background:linear-gradient(90deg,var(--panel-2) 0%,var(--panel-3) 50%,var(--panel-2) 100%);
+  background-size:200% 100%;animation:shim 1.4s ease-in-out infinite;
+}
+.skel i:nth-child(2){animation-delay:.12s} .skel i:nth-child(3){animation-delay:.24s}
+@keyframes shim{0%{background-position:120% 0}100%{background-position:-120% 0}}
+
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+
+<header class="topbar" id="topbar">
+  <button class="idbtn" id="idbtn">
+    <span class="nm" id="sym">NDX</span><i class="livedot off" id="livedot"></i><span class="car">▾</span>
+  </button>
+  <span class="rg" id="regime"><i></i><span>…</span></span>
+  <div class="price-wrap">
+    <div class="price tnum" id="spot">—</div>
+    <div class="chg tnum" id="chg">—</div>
+  </div>
+</header>
+
+<nav class="strip slim" id="strip">
+  <div class="striprow" id="striprow"></div>
+  <button class="stripx" id="stripx" aria-label="Marktleiste auf- und zuklappen">⌄</button>
+</nav>
+<button class="striphandle" id="striphandle" hidden
+        aria-label="Marktleiste zurückholen"><i></i></button>
+
+<main class="track" id="track">
+  <section class="view chart" id="v-chart">
+    <div class="cvwrap" id="cvwrap">
+      <canvas id="cv"></canvas>
+      <div class="meta" id="meta"></div>
+      <div class="cross" id="cross"></div>
+      <div class="tfbar" id="tfbar"></div>
+    </div>
+  </section>
+  <section class="view" id="v-level"><div class="pad" id="p-level"><div class="skel"><i></i><i></i><i></i></div></div></section>
+  <section class="view" id="v-gamma"><div class="pad" id="p-gamma"><div class="skel"><i></i><i></i><i></i></div></div></section>
+  <section class="view" id="v-agent"><div class="pad" id="p-agent"><div class="skel"><i></i><i></i><i></i></div></div></section>
+  <section class="view" id="v-plan"><div class="pad" id="p-plan"><div class="skel"><i></i><i></i><i></i></div></div></section>
+</main>
+
+<nav class="tabbar" id="tabbar">
+  <button class="tb on" data-v="0"><svg viewBox="0 0 24 24"><path d="M3 17l5-6 4 3 5-8 4 5"/><path d="M3 21h18"/></svg><span>Chart</span></button>
+  <button class="tb" data-v="1"><svg viewBox="0 0 24 24"><path d="M3 7h18M3 12h18M3 17h18"/><circle cx="8" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg><span>Level</span></button>
+  <button class="tb" data-v="2"><svg viewBox="0 0 24 24"><path d="M12 3v18M5 8v8M19 8v8M8.5 5.5v13M15.5 5.5v13"/></svg><span>Gamma</span></button>
+  <button class="tb" data-v="3"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 1 1-3.2-6.4"/><path d="M4 20l1.6-4"/><circle cx="12" cy="12" r="2.4"/></svg><span>Agent</span><span class="badge" id="badge" hidden></span></button>
+  <button class="tb" data-v="4"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2.5"/><path d="M8 8h8M8 12h8M8 16h5"/></svg><span>Plan</span></button>
+</nav>
+
+<div class="scrim" id="scrim"></div>
+<div class="sheet" id="sheet">
+  <div class="grabzone" id="grabzone"><div class="grab"></div></div>
+  <div class="sh-head"><button class="sh-close" id="sheetClose" aria-label="Schließen">✕</button></div>
+  <div id="sheetBody"></div>
+</div>
+
+<script>
+"use strict";
+
+const S = {
+  market:"NQ", tf:"15m", data:null, plan:null, messages:[], overview:[],
+  view:0, profileMode:"heat", layers:{tpo:false, va:true, gpbox:true, gcurve:false, orbs:true, fix:true, live:true, zonen:true, profil:true, session:true},
+  fitAll:false, immersive:false, lastMsgCount:0, busy:false, cross:null, trails:null,
+  // Preisfenster von Hand. null heisst: die Automatik entscheidet und der
+  // Kurs steht in der Mitte. Sobald jemand an der Skala zieht, steht hier
+  // ein Fenster und die Automatik schweigt, bis AUTO es wieder loescht.
+  vs:null, autoScale:null, geo:null, autoBtn:null,
+  // Ladephase. "keine Kursdaten" stand beim Start im leeren Chart und
+  // sah aus wie ein Fehler, obwohl es Warten war.
+  laedt:true, ladeFehler:null,
+};
+const TFS = ["1m","5m","15m","30m","1h","1d"];
+const SYM = {NQ:"NDX", ES:"SPX", YM:"DJX", RTY:"RUT", GC:"GLD"};
+
+const $ = id => document.getElementById(id);
+/** Zahlen mit deutschen Tausenderpunkten.
+
+    Die Formatierer werden gemerkt. v.toLocaleString(..., {optionen})
+    baut bei JEDEM Aufruf einen neuen Intl-Formatierer auf, und das ist
+    keine Kleinigkeit: gemessen ging ein Drittel der Rechenzeit eines
+    Bildes allein dafuer drauf - 33 Prozent, verteilt auf die Preisleiter,
+    die Level-Schilder, das Fadenkreuz und jede Zahl in den Tafeln.
+    Derselbe Formatierer, einmal gebaut, macht daraus einen Bruchteil. */
+const _nf = new Map();
+function nfmt(d){
+  let f = _nf.get(d);
+  if(!f){
+    f = new Intl.NumberFormat("de-DE",
+        {minimumFractionDigits:d, maximumFractionDigits:d});
+    _nf.set(d, f);
+  }
+  return f;
+}
+const fmt = (v,d=0) => (v==null||isNaN(v)) ? "—" : nfmt(d).format(v);
+/** Ein PREIS zur Anzeige. Verschiebt in den Preisraum des Brokers.
+
+    Getrennt von fmt(), und das ist der ganze Punkt: fmt() bleibt fuer
+    Abstaende zustaendig - ATR, Zonenbreiten, "42 Punkte entfernt",
+    Drift. Ein Abstand darf NICHT verschoben werden, denn der Versatz
+    kuerzt sich in jeder Differenz heraus. Beides durch dieselbe
+    Funktion zu schicken hiesse, jede Distanz um den Versatz zu
+    verfaelschen.
+
+    Die Geometrie fasst px() ebenfalls nicht an. Kerzen, Waende und
+    Achse bleiben im Index-Preisraum und liegen damit weiter exakt
+    aufeinander; verschoben wird allein die ausgegebene Zahl. Genau eine
+    Umrechnung, an genau einer Stelle - siehe terminal/broker.py. */
+const px = (v,d=0) => (v==null||isNaN(v)) ? "—" : fmt(v + (S.off||0), d);
+const fmtM = v => v==null ? "—" : (Math.abs(v)>=1e9 ? (v/1e9).toFixed(1)+" Mrd"
+  : Math.abs(v)>=1e6 ? (v/1e6).toFixed(0)+" Mio" : (v/1e3).toFixed(0)+"k");
+const sgn = v => v==null ? "—" : (v>=0?"+":"")+fmt(v);
+const esc = s => String(s==null?"":s).replace(/[&<>"']/g,
+  c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const hhmm = iso => { try{ return new Date(iso).toLocaleTimeString("de-DE",
+  {hour:"2-digit",minute:"2-digit"}); }catch(e){ return ""; } };
+const buzz = ms => { try{ navigator.vibrate && navigator.vibrate(ms); }catch(e){} };
+
+/** Kurse weich auf den neuen Wert zaehlen statt springen zu lassen.
+    Bei einer Zahl, die sich alle 20 Sekunden aendert, macht der Sprung
+    aus einer kleinen Bewegung eine grosse - das Zaehlen zeigt die
+    Richtung, ohne sie zu uebertreiben. */
+const _ticks = new WeakMap();
+function tickTo(el, val, dur=520){
+  if(val==null || isNaN(val)){ el.textContent="—"; return; }
+  const from = _ticks.get(el);
+  _ticks.set(el, val);
+  if(from==null || Math.abs(val-from) < 0.01 || !window.requestAnimationFrame){
+    el.textContent = px(val); return;
+  }
+  const t0 = performance.now();
+  const step = now => {
+    const k = Math.min(1, (now-t0)/dur);
+    const e = 1 - Math.pow(1-k, 3);          // sanft auslaufend
+    el.textContent = px(from + (val-from)*e);
+    if(k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+// ======================= Laden =======================
+async function load(){
+  const markt = S.market;
+  try{
+    const r = await fetch(`/api/state?market=${markt}&tf=${S.tf}`);
+    if(!r.ok) throw new Error("Server antwortet "+r.status);
+    const d = await r.json();
+    if(markt !== S.market) return;     // inzwischen weitergeklickt
+    const fresh = !S.data || S.data.market!==d.market || S.data.interval!==d.interval;
+    // Stand der Ausschnitt am rechten Rand, laeuft er mit. Sonst faellt
+    // der Chart im Lauf der Sitzung still hinter den Kurs zurueck - man
+    // sieht ein Bild, das aussieht wie jetzt und eine Stunde alt ist.
+    const nAlt = (S.data?.bars||[]).length;
+    const tAlt = nAlt ? S.data.bars[nAlt-1].t : 0;
+    const amRand = S.vw ? (S.vw.i1 >= nAlt - 0.6) : true;
+    S.data = d;
+    // Versatz in den Preisraum des Brokers. Steht an genau dieser einen
+    // Stelle im Zustand; px() liest ihn, sonst niemand.
+    S.off = (d.space && d.space.offset) || 0;
+    S.laedt = false; S.ladeFehler = null;
+    if(fresh || !S.view0){ fitView(); S.vs = null; }
+    else if(amRand && S.vw){
+      const zu = d.bars.length - nAlt;
+      if(zu > 0){ S.vw.i0 += zu; S.vw.i1 += zu; clampView(); }
+    }
+    // Eine NEUE SITZUNG faengt von vorn an: aus 389 Balken werden um
+    // 15:30 wieder eine Handvoll. Der Ausschnitt stand dann bei Index
+    // 330 von 5 - hinter dem Ende der Reihe, und der Chart war leer.
+    //
+    // Erkannt wird sie am Kalendertag des juengsten Balkens, nicht an
+    // der blossen Anzahl: die schwankt auch mal, wenn eine kaputte
+    // Kerze herausfaellt, und dafuer soll der Ausschnitt nicht
+    // zurueckspringen.
+    const tNeu = d.bars.length ? d.bars[d.bars.length-1].t : 0;
+    const neueSitzung = tAlt && tNeu
+      && new Date(tAlt*1000).toDateString() !== new Date(tNeu*1000).toDateString();
+    if(neueSitzung || (S.vw && S.vw.i0 > d.bars.length - 1)){
+      fitView(); S.vs = null;
+    }
+    S.view0 = true;
+    render();
+  }catch(e){
+    // Fehler nur dann zeigen, wenn noch gar nichts da ist. Steht schon
+    // ein Chart, ist ein misslungener Nachlauf kein Grund, ihn gegen
+    // eine Fehlermeldung zu tauschen - der naechste Takt holt ihn.
+    if(!S.data || !(S.data.bars||[]).length){
+      S.laedt = false;
+      S.ladeFehler = (e && e.message) ? e.message : "keine Verbindung";
+      paint();
+    }
+  }
+}
+/** Nur die Kerzen nachladen.
+
+    Beim Wechsel der Zeitebene aendert sich im ganzen Snapshot NICHTS
+    ausser den Balken: Kette, Gamma, Waende, Level, Volumenprofil und TPO
+    haengen an den Optionsdaten und an Minutenbars, nicht an der
+    gewaehlten Aufloesung. Trotzdem wurde bisher der komplette Snapshot
+    neu gebaut - gemessen 12 Sekunden fuer eine Zahl, die sich nicht
+    aendert.
+
+    Jetzt kommt zuerst der schmale Endpunkt, der nur Balken liefert; der
+    Chart steht damit sofort. Der volle Stand wird danach im Hintergrund
+    nachgezogen, damit auch die Bruecken-Kerzen und das Alter stimmen. */
+async function ladeKerzen(){
+  const tf = S.tf, markt = S.market;
+  try{
+    const r = await fetch(`/api/candles?market=${markt}&tf=${tf}`);
+    if(!r.ok) return false;
+    const d = await r.json();
+    // Zwischenzeitlich weitergeklickt? Dann gehoert die Antwort nicht
+    // mehr zu dem, was auf dem Schirm steht.
+    if(tf !== S.tf || markt !== S.market) return false;
+    if(!d.bars || !d.bars.length) return false;
+    S.data = Object.assign({}, S.data, {
+      bars: d.bars, interval: tf, bar_source: d.source});
+    S.laedt = false; S.vs = null;
+    fitView();
+    // Solange nur Balken da sind, NUR den Chart zeichnen. Die Tafeln
+    // rechts leben von Kette, Gamma und Zonenbuch - mit einem halben
+    // Snapshot gefuettert wuerden sie Unsinn anzeigen oder brechen.
+    // Sie kommen, wenn load() durch ist, und bis dahin steht ihr
+    // Ladebalken.
+    if(S.data.spot != null) render();
+    else { renderTf(); measureChrome(); paint(); }
+    return true;
+  }catch(e){ return false; }
+}
+
+async function loadTrails(){
+  try{
+    S.trails = await (await fetch(`/api/trails?market=${S.market}`)).json();
+    paint();
+  }catch(e){}
+}
+async function loadOverview(){
+  try{ S.overview = await (await fetch("/api/overview")).json(); renderStrip(); }catch(e){}
+}
+async function loadMessages(){
+  try{
+    const d = await (await fetch(`/api/agent/messages?market=${S.market}`)).json();
+    S.messages = d.messages||[]; S.budget = d.budget;
+    if(S.messages.length > S.lastMsgCount){
+      if(S.view!==3){ $("badge").hidden=false; buzz(12); }
+      S.lastMsgCount = S.messages.length;
+    }
+    renderAgent();
+  }catch(e){}
+}
+async function loadPlan(){
+  try{ S.plan = await (await fetch(`/api/agent/plan?market=${S.market}`)).json(); renderPlan(); }
+  catch(e){}
+}
+
+// ======================= Chart =======================
+const cv=$("cv"), ctx=cv.getContext("2d");
+let W=0,H=0,dpr=1;
+const PAD={r:56,b:68,t:6};
+let CHROME=124;
+
+function measureChrome(){
+  const tb = $("topbar")?.offsetHeight || 62;
+  const el = $("strip");
+  // Weggeklappt zaehlt die Leiste nicht mehr mit. Vorher war das
+  // Wegklappen rein optisch - sie schob sich aus dem Bild, aber der
+  // Chart rechnete weiter mit ihrer Hoehe und gewann keinen Millimeter.
+  //
+  // An ihre Stelle tritt aber der Griff, und der braucht sein eigenes
+  // Band. Mit null gerechnet legte sich die Statuszeile ueber ihn und
+  // das Wort "Kerzen" verschwand halb hinter der Pille - zwei Dinge am
+  // selben Platz, von denen keines mehr lesbar war.
+  const weg = el ? el.classList.contains("tucked") : true;
+  const st = weg ? ($("striphandle")?.offsetHeight || 22)
+                 : (el ? el.offsetHeight : 0);
+  CHROME = tb + st;
+  document.documentElement.style.setProperty("--topbar-h", tb+"px");
+  document.documentElement.style.setProperty("--chrome-h", CHROME+"px");
+}
+
+/** Die Farben des Stilbogens, einmal gelesen.
+
+    Sie stehen als CSS-Variablen und aendern sich nie - es gibt keinen
+    Hell-Modus und keinen Umschalter. Sie bei jedem Zugriff neu abzufragen
+    hiess, den Layoutbaum zu befragen, und zwar innerhalb der Schleifen,
+    die ueber tausend Profilbaender und jede Perle laufen. */
+let TH = {};
+const THEMA = ["--ground","--panel","--panel-2","--panel-3","--line","--line-soft",
+  "--ink","--ink-dim","--ink-faint","--resist","--support","--pivot","--struct",
+  "--va","--agent","--warn","--up","--down","--mono","--sans"];
+function readTheme(){
+  const cs = getComputedStyle(document.documentElement);
+  TH = {};
+  THEMA.forEach(k => TH[k] = cs.getPropertyValue(k).trim());
+}
+readTheme();
+
+/** Zeichnen auf den naechsten Bildaufbau buendeln.
+
+    touchmove feuert auf neueren Telefonen bis zu 120 mal je Sekunde.
+    Jedes Ereignis sofort zu zeichnen hiess, mehr Bilder zu rechnen als der
+    Bildschirm zeigen kann - die Warteschlange lief voll und der Chart
+    hinkte dem Finger hinterher. Gemessen kostete ein Bild 26 ms; bei 120
+    Ereignissen je Sekunde waren das drei Sekunden Arbeit je Sekunde Wisch.
+    Gebuendelt wird hoechstens einmal je Bildaufbau gezeichnet. */
+let rafId = 0;
+function paint(){
+  if(rafId) return;
+  rafId = requestAnimationFrame(()=>{ rafId = 0; draw(); });
+}
+
+function resize(){
+  measureChrome();
+  readTheme();
+  const w=$("cvwrap");
+  // Bis Faktor 3 statt 2: ein iPhone Pro zeichnet damit auf dem echten
+  // Panelraster statt auf zwei Dritteln davon.
+  dpr = Math.min(devicePixelRatio||1, 3);
+  W=w.clientWidth; H=w.clientHeight;
+  cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.textRendering = "geometricPrecision";
+  ORB_SPRITES.clear();
+  draw();
+}
+
+/** Grund und Vignette sind Bilder, keine Rechnungen.
+
+    Beide sind Verlaeufe ueber die ganze Flaeche - bei Faktor 3 sind das
+    1236 mal 2574 Geraetepixel, die der Browser in jedem Bild neu
+    ausmischt. Sie aendern sich aber nur, wenn sich das Fenster aendert.
+    Einmal gebacken und danach kopiert kostet dasselbe wie ein Bild
+    zeichnen statt wie hundert. */
+let _hg = {k:"", grund:null, vig:null};
+function hintergrund(topPad, pw, ph){
+  const k = [W,H,dpr,topPad,pw,ph,TH["--ground"]].join("|");
+  if(_hg.k === k) return _hg;
+  const mach = () => {
+    const c = document.createElement("canvas");
+    c.width = Math.round(W*dpr); c.height = Math.round(H*dpr);
+    const g = c.getContext("2d"); g.setTransform(dpr,0,0,dpr,0,0);
+    return [c, g];
+  };
+  const [cg, gg] = mach();
+  const bg = gg.createLinearGradient(0,0,0,H);
+  bg.addColorStop(0, TH["--panel"]); bg.addColorStop(0.55, TH["--ground"]);
+  bg.addColorStop(1, TH["--ground"]);
+  gg.fillStyle = bg; gg.fillRect(0,0,W,H);
+
+  const [cv2, gv] = mach();
+  const vig = gv.createRadialGradient(W*0.45, H*0.45, Math.min(W,H)*0.35,
+                                      W*0.45, H*0.45, Math.max(W,H)*0.78);
+  vig.addColorStop(0, "rgba(0,0,0,0)");
+  vig.addColorStop(1, "rgba(0,0,0,0.30)");
+  gv.fillStyle = vig; gv.fillRect(0,0,pw,topPad+ph);
+
+  _hg = {k, grund:cg, vig:cv2};
+  return _hg;
+}
+
+/** Textbreiten merken. measureText ist eine Messung im Schriftsystem und
+    kostet je Aufruf; die Beschriftungen der Level sind bei jedem Bild
+    dieselben und aendern sich nur mit den Daten. */
+const _mw = new Map();
+function textW(ctx, txt){
+  const k = ctx.font + "\u0000" + txt;
+  let w = _mw.get(k);
+  if(w === undefined){ w = ctx.measureText(txt).width; if(_mw.size > 600) _mw.clear(); _mw.set(k, w); }
+  return w;
+}
+
+/** Auf das Geraetepixel rasten. Eine Linie auf halbem CSS-Pixel ist bei
+    Faktor 3 kein halbes Geraetepixel mehr und wird grau ausgefranst. */
+function snap(v){ return Math.round(v*dpr)/dpr; }
+/** Mittiger Versatz fuer haarscharfe 1px-Linien, abhaengig vom Faktor. */
+function half(){ return 0.5/dpr; }
+function fitView(){
+  const n=(S.data?.bars||[]).length; if(!n){ S.vw=null; return; }
+  const want=Math.min(n, S.tf==="1d"?90:70);
+  // Ein Achtel Freiraum rechts von Anfang an: der letzte Balken steht
+  // dann nicht auf der Preisachse, sondern davor, und die Marken haben
+  // Platz, nach rechts weiterzulaufen.
+  const luft = want*0.12;
+  S.vw={i0:Math.max(0,n-want+luft), i1:Math.max(0,n-want+luft)+want};
+}
+function span(){ return S.vw ? S.vw.i1-S.vw.i0 : 0; }
+/** Wieviel Ausschnitt darf rechts neben dem letzten Balken leer bleiben.
+
+    Vorher null: der Ausschnitt endete hart am letzten Balken, und der
+    Kurs klebte damit immer am rechten Rand. Genau dort braucht man aber
+    Platz - dort liegt das, was noch nicht passiert ist, und dorthin
+    zeigen Wand, Zero-Gamma und jede Linie, die man einzeichnet.
+
+    Zwei Drittel des Ausschnitts sind der uebliche Freiraum. Ein Drittel
+    Balken bleibt immer stehen, sonst zeigt der Chart ins Nichts und man
+    findet nicht mehr zurueck. */
+const LUFT = 0.66;
+function clampView(){
+  const n=(S.data?.bars||[]).length; if(!n||!S.vw) return;
+  const sp=Math.max(10, Math.min(n, S.vw.i1-S.vw.i0));
+  const rechts = n - sp + sp*LUFT;
+  S.vw.i0=Math.max(0, Math.min(rechts, S.vw.i0)); S.vw.i1=S.vw.i0+sp;
+}
+
+
+/** Fasst fixe Level auf demselben Preis zusammen: eine Marke, mehrere Gründe. */
+function mergedFixed(){
+  const lv = S.data?.fixed?.levels || [];
+  const rank = {untested:0, tested:1, held:2, broken:3};
+  const by = new Map();
+  lv.forEach(l=>{
+    const k = Math.round(l.price);
+    const cur = by.get(k);
+    if(!cur){ by.set(k, {...l, labels:[l.label]}); return; }
+    cur.labels.push(l.label);
+    if(rank[l.state] > rank[cur.state]) cur.state = l.state;
+    cur.exams_total = Math.max(cur.exams_total, l.exams_total);
+    cur.exams_held = Math.max(cur.exams_held||0, l.exams_held||0);
+    cur.exams_broken = Math.max(cur.exams_broken||0, l.exams_broken||0);
+    if(Math.abs(l.drift||0) > Math.abs(cur.drift||0)){ cur.drift=l.drift; cur.live=l.live; }
+    if(l.born < cur.born) cur.born = l.born;
+  });
+  return [...by.values()].sort((a,b)=>b.price-a.price);
+}
+
+/** Fixe Level aus dem Zonenbuch, dazu optional der laufende Stand als Geist. */
+/** Farbe nach Art des Levels, nicht nach seiner Lage zum Kurs.
+
+    Eine Call-Wand bleibt Gold, auch wenn der Kurs darueber steigt; ein
+    Zero-Gamma bleibt Pivot, auch wenn es unter dem Kurs liegt. Vorher
+    faerbte die Lage - dann leuchtete das Zero-Gamma wie eine Put-Wand
+    und behauptete etwas, das es nicht ist. */
+function levelColor(kind){
+  if(/^call/.test(kind)) return "--resist";
+  if(/^put/.test(kind))  return "--support";
+  if(/flip|pain|pin/.test(kind)) return "--pivot";
+  return "--struct";
+}
+
+/** Die Levelliste aendert sich mit den Daten, nicht mit dem Ausschnitt.
+
+    Sie bei jedem Bild neu zu bauen hiess, waehrend eines Wischs sechzig
+    mal dieselbe Liste aus denselben Zahlen zusammenzusetzen. Sie haengt
+    an den geladenen Daten und an den Schaltern - beides steht waehrend
+    einer Geste still. */
+let _lvCache = {d:null, tr:null, k:"", v:null};
+function chartLevelsCached(){
+  const k = [S.layers.fix, S.layers.live, S.layers.session, S.layers.zonen,
+             S.data?.spot].join("|");
+  if(_lvCache.d === S.data && _lvCache.tr === S.trails && _lvCache.k === k)
+    return _lvCache.v;
+  _lvCache = {d:S.data, tr:S.trails, k, v:chartLevels()};
+  return _lvCache.v;
+}
+
+function chartLevels(){
+  const d=S.data; if(!d) return [];
+  const out=[];
+  const roleCol = p => p>d.spot*1.0015 ? "--resist" : p<d.spot*0.9985 ? "--support" : "--pivot";
+  if(S.layers.fix) mergedFixed().forEach(l=>{
+    out.push({p:l.price, lab:l.labels.join(" · "), c:levelColor(l.kind),
+      w:/_2|_3/.test(l.kind)?1:1.8,
+      dash:l.state==="broken"?[2,3]:null, dim:l.state==="broken"?.55:1, badge:true});
+  });
+  if(S.layers.live){
+    // Geisterlinien: wohin die Wand seit dem Einfrieren gewandert ist.
+    mergedFixed().forEach(l=>{
+      if(l.live && l.drift && Math.abs(l.drift) > (d.atr||1)*0.03)
+        out.push({p:l.live, lab:"", c:levelColor(l.kind), w:1, dash:[1,5], dim:.4, badge:false});
+    });
+  }
+  if(S.layers.session){
+    const s=d.session||{}, vp=d.vp||{};
+    if(vp.poc) out.push({p:vp.poc, lab:"POC", c:"--pivot", w:1, dash:[1,4], dim:.85, badge:true});
+    if(s.pdh) out.push({p:s.pdh, lab:"PDH", c:"--pivot", w:1, dash:[1,4], dim:.6, badge:true});
+    if(s.pdl) out.push({p:s.pdl, lab:"PDL", c:"--pivot", w:1, dash:[1,4], dim:.6, badge:true});
+  }
+  return out;
+}
+
+/** Zeitstempel auf die X-Achse abbilden - ueber die Bars, nicht linear.
+    Zwischen zwei Sitzungen klafft eine Luecke, die eine reine
+    Zeitrechnung falsch auffuellen wuerde. */
+/** Zeitpunkt -> Balkenindex, als Bruch.
+
+    Sucht in der VOLLEN Reihe, nicht im sichtbaren Ausschnitt. Vorher hing
+    das Ergebnis am Anfang des Ausschnitts und musste bei jedem Schieben
+    neu gedeutet werden; im absoluten Index ist es eine Eigenschaft des
+    Zeitpunkts allein. */
+function tToI(ts, all){
+  const n = all.length;
+  if(n < 2) return 0;
+  if(ts <= all[0].t) return 0;
+  if(ts >= all[n-1].t){
+    const step = all[n-1].t - all[n-2].t || 60;
+    return n - 1 + (ts - all[n-1].t)/step;
+  }
+  let lo=0, hi=n-1;
+  while(lo < hi-1){ const m=(lo+hi)>>1; if(all[m].t <= ts) lo=m; else hi=m; }
+  const span = (all[hi].t - all[lo].t) || 1;
+  return lo + (ts - all[lo].t)/span;
+}
+
+/** Runde Schrittweite fuer eine Preisleiter.
+
+    1, 2, 2,5 oder 5 mal eine Zehnerpotenz - andere Schritte liest niemand
+    ab. 25 Punkte sind eine Marke, 23,7 sind eine Rechnung. */
+function niceStep(range, want){
+  const roh = Math.max(1e-9, range / Math.max(1, want));
+  const p = Math.pow(10, Math.floor(Math.log10(roh))), k = roh / p;
+  return (k <= 1 ? 1 : k <= 2 ? 2 : k <= 2.5 ? 2.5 : k <= 5 ? 5 : 10) * p;
+}
+
+/** Volumenprofil, zweigeteilt nach gehandelter Optionsseite.
+
+    Cboe liefert je Minute getrennt Call- und Put-Volumen. Ein Preisband,
+    an dem fast nur Puts liefen, bedeutet etwas anderes als eines mit
+    ueberwiegend Calls - auch wenn die Gesamtsumme dieselbe ist. Deshalb
+    faerbt sich jeder Balken zwischen Tuerkis (Put-lastig) und Gold
+    (Call-lastig) ein, statt einheitlich grau zu bleiben.
+
+    Dazu markiert: Value Area, POC, Volumenknoten und Vakuum-Zonen. */
+/** TPO als Blockreihen - eine Zelle je Periode, in der der Preis
+    beruehrt wurde. Bewusst anders gezeichnet als das Volumenprofil:
+    das eine ist eine Flaeche (wie viel), das andere sind zaehlbare
+    Bloecke (wie oft). Wer beide sieht, soll sie nicht verwechseln.
+
+    Das TPO bekommt eine eigene abgedunkelte Spalte statt frei ueber den
+    Kerzen zu liegen. Ohne sie standen elf deckende Bloecke je Reihe vor
+    dem Chart und die Kerzen der ersten Handelsstunde waren nicht mehr
+    lesbar - zwei Ebenen, die sich gegenseitig ausloeschen. Mit eigener
+    Spalte bleibt es das, was es sein soll: ein Streifen neben dem
+    Chart, den man abzaehlen kann. */
+function drawTPO(ctx, y, pw, ph, topPad, V){
+  const tp = S.data?.tpo;
+  if(!tp || !(tp.bins||[]).length) return;
+  const x0 = (S.layers.profil ? Math.min(pw*0.19, 74) + 5 : 2) + 4;
+  const cell = 3.0, gap = 1.0;
+  const maxCells = Math.max(1, Math.floor(Math.min(52, pw*0.14) / (cell+gap)));
+  const colW = maxCells*(cell+gap) + 8;
+  // Blockhoehe aus der ECHTEN Hoehe eines Preisbands, nicht aus
+  // ph/Baenderzahl. Der alte Ausdruck unterstellte, dass das TPO immer
+  // genau die sichtbare Preisspanne fuellt - gemessen fuellte es das
+  // 1,43-fache, und jeder Block wurde entsprechend zu kurz gezeichnet.
+  // Solange die Skala sich von selbst nach den Kerzen richtete, fiel das
+  // nicht auf; seit man an ihr ziehen kann, waere die Blockhoehe beim
+  // Zoomen als einzige stehengeblieben.
+  //
+  // Der Massstab steckt in y() selbst: y(0)-y(1) ist, wieviele
+  // Bildpunkte ein Preispunkt gerade misst. Die 0,82 lassen die Luecke
+  // stehen, an der man die Bloecke abzaehlt - beim TPO ist sie Absicht,
+  // anders als beim Volumenprofil.
+  const pxProPunkt = y(0) - y(1);
+  const bandH = (tp.step || ((tp.hi - tp.lo) / (tp.bins_n || 180))) * pxProPunkt;
+  const rowH = Math.max(1.2, bandH * 0.82);
+
+  // Eigene Spalte: ein dunkler Grund, damit die Bloecke gegen ihn
+  // zaehlbar sind und nicht gegen die Kerzen dahinter.
+  // Die Spalte reicht nur so weit wie die Sitzung, die sie beschreibt -
+  // nicht ueber die ganze Charthoehe. Ueber die volle Hoehe gezogen lief
+  // sie als heller Balken durch den leeren Bereich unterhalb der Kerzen
+  // und sah aus wie ein Zeichenfehler.
+  const cTop = Math.max(topPad, y(tp.hi)), cBot = Math.min(topPad+ph, y(tp.lo));
+  if(cBot - cTop < 8) return;
+  ctx.save();
+  // Nicht ganz deckend: die Kerzen dahinter bleiben schemenhaft
+  // sichtbar. Deckend war die Spalte ein Loch im Chart, durchsichtig
+  // waren die Bloecke nicht mehr abzaehlbar - das hier ist die Mitte.
+  const bgGrad = ctx.createLinearGradient(x0-4, 0, x0-4+colW, 0);
+  bgGrad.addColorStop(0, V("--ground")); bgGrad.addColorStop(1, V("--panel"));
+  ctx.fillStyle = bgGrad; ctx.globalAlpha = .62;
+  ctx.fillRect(x0-4, cTop, colW, cBot-cTop);
+  ctx.globalAlpha = .5; ctx.strokeStyle = V("--panel-3"); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(snap(x0-4+colW), cTop);
+  ctx.lineTo(snap(x0-4+colW), cBot); ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // Initial Balance: die Spanne der ersten beiden Perioden. Der Bereich,
+  // gegen den der Rest des Tages gemessen wird.
+  if(tp.ib_low && tp.ib_high){
+    const y1=Math.min(y(tp.ib_high), y(tp.ib_low)), y2=Math.max(y(tp.ib_high), y(tp.ib_low));
+    ctx.fillStyle=V("--struct"); ctx.globalAlpha=.14;
+    ctx.fillRect(x0-4, y1, colW, Math.max(1,y2-y1));
+    ctx.globalAlpha=.55; ctx.strokeStyle=V("--struct"); ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x0-3, y1); ctx.lineTo(x0-3, y2); ctx.stroke();
+    ctx.globalAlpha=1;
+  }
+
+  tp.bins.forEach(b=>{
+    if(!b.n) return;
+    const yy = y(b.p);
+    if(yy < topPad-1 || yy > topPad+ph+1) return;
+    const n = Math.min(maxCells, b.n);
+    // Farbe nach Anzahl der Perioden - blau fuer die Preise, durch die
+    // der Markt nur streifte, rot fuer die, an denen er den halben Tag
+    // stand. Beim TPO traegt die Farbe echte zusaetzliche Information:
+    // die Blockzahl je Zeile ist auf die Spaltenbreite gedeckelt, die
+    // Farbe ist es nicht.
+    const c = heat(b.w);
+    ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
+    ctx.globalAlpha = b.va ? .92 : .62;
+    for(let i=0;i<n;i++)
+      ctx.fillRect(x0 + i*(cell+gap), snap(yy - rowH/2), cell, Math.max(1, rowH));
+  });
+  ctx.globalAlpha=1;
+
+  // Single Prints: Preise, die nur eine einzige Periode gesehen haben -
+  // dort ist der Markt ohne Gegenwehr durchgelaufen.
+  (tp.singles||[]).forEach(p=>{
+    const yy=snap(y(p))+half();
+    if(yy < topPad || yy > topPad+ph) return;
+    ctx.strokeStyle=V("--resist"); ctx.globalAlpha=.55; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x0-4,yy); ctx.lineTo(x0-1,yy); ctx.stroke();
+  });
+  ctx.globalAlpha=1;
+
+  if(tp.poc){
+    const yy=snap(y(tp.poc))+half();
+    ctx.strokeStyle=V("--pivot"); ctx.globalAlpha=.85; ctx.lineWidth=1.2;
+    ctx.setLineDash([2,3]);
+    ctx.beginPath(); ctx.moveTo(x0-4,yy); ctx.lineTo(x0-4+colW,yy); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha=1;
+  }
+
+  // Beschriftung der Spalte, damit sie nicht fuer ein zweites
+  // Volumenprofil gehalten wird.
+  ctx.font="7px "+V("--mono"); ctx.fillStyle=V("--struct");
+  ctx.textAlign="left"; ctx.globalAlpha=.8;
+  ctx.fillText("TPO "+tp.brackets+"\u00d7"+tp.bracket_min+"m", x0+2, cBot-3);
+  ctx.globalAlpha=1;
+  ctx.restore();
+}
+
+/** Farbverlauf des Profils nach Volumenstaerke - blau, gruen, gelb, rot.
+    Uebernommen aus der Desktop-Vorlage: die Farbe verstaerkt dort die
+    Balkenlaenge, statt eine zweite Groesse zu kodieren. Der Blick findet
+    den POC dadurch ohne Suchen. */
+const HEAT = [[46,86,168],[38,150,190],[52,168,120],[150,190,70],
+              [224,180,60],[220,120,50],[196,60,58]];
+function heat(t){
+  t = Math.max(0, Math.min(0.999, t));
+  const f = t*(HEAT.length-1), i = Math.floor(f), k = f-i;
+  const a = HEAT[i], b = HEAT[Math.min(HEAT.length-1, i+1)];
+  return [Math.round(a[0]+(b[0]-a[0])*k),
+          Math.round(a[1]+(b[1]-a[1])*k),
+          Math.round(a[2]+(b[2]-a[2])*k)];
+}
+
+/** Der Profilstreifen in seinem eigenen Raster: eine Bildzeile je Band.
+
+    Gemerkt, solange Profil, Farbwahl und Breite dieselben bleiben - also
+    ueber jede Geste hinweg und bis zum naechsten Nachladen. */
+let _vpCache = {vp:null, k:"", c:null};
+function profilStreifen(vp, maxW, hZiel){
+  const nB = vp.bins_n || (vp.w||[]).length;
+  const W_ = vp.w || [];
+  if(!nB || !W_.length) return null;
+  // Der Streifen wird mindestens so hoch gezeichnet, wie er am Ende auf
+  // dem Schirm steht. Sonst vergroessert die Leinwand beim Kopieren, und
+  // Vergroessern heisst Verwischen: 1000 Zeilen auf 2100 Geraetepixel
+  // gezogen ergaben einen weichen Verlauf statt abzaehlbarer Baender -
+  // und die Feinheit ist bei einem Profil der ganze Punkt. Verkleinern
+  // ist dagegen genau richtig, es mischt.
+  //
+  // Auf 32 Zeilen gerundet, damit nicht bei jedem Bildpunkt neu
+  // gezeichnet wird - und trotzdem nah genug an 1:1, dass die Glaettung
+  // beim Kopieren fast nichts zu tun hat. Gemessen an der Feinheit der
+  // Baender: eine Zweierpotenz als Raster verfehlte die Zielhoehe um bis
+  // zu ein Drittel, und genau dieses Verhaeltnis verwischte sie.
+  //
+  // Ist der Streifen am Ende KLEINER als seine Baender - weit
+  // herausgezoomt -, bleibt er bei 1000 Zeilen und die Leinwand
+  // verkleinert. Das ist hier das Richtige: Verkleinern mischt, und
+  // gerundet fielen sonst zwei Drittel der Zeilen auf dieselbe und aus
+  // 1000 Baendern wuerden sichtbar 600.
+  const hoehe = Math.min(8192, Math.max(nB, Math.ceil((hZiel||0)/32)*32));
+  const k = [S.profileMode, Math.round(maxW), S.layers.va, hoehe].join("|");
+  if(_vpCache.vp === vp && _vpCache.k === k) return _vpCache.c;
+
+  const CS = vp.cs || [];
+  const va0 = vp.va0 == null ? -1 : vp.va0, va1 = vp.va1 == null ? -2 : vp.va1;
+  const gold = [224,169,60], violet = [169,123,232], flat = [91,106,125];
+  const cream = [207,198,178], slate = [91,106,125];
+  const c = document.createElement("canvas");
+  // Breite in Geraetepixeln, damit die Balkenenden beim Kopieren nicht
+  // schon im Streifen verwaschen sind. Hoehe: genau ein Punkt je Band.
+  const bw2 = Math.max(1, Math.round(maxW*dpr));
+  c.width = bw2; c.height = hoehe;
+  const rh = hoehe / nB;
+  // Winziger Ueberstand, damit zwischen zwei Zeilen keine Haarlinie
+  // durchscheint, wo die Kantenglaettung beide zur Haelfte deckt.
+  const ueber = rh*0.25;
+  const g = c.getContext("2d");
+  for(let i=0;i<nB;i++){
+    const w = W_[i]|0;
+    if(w <= 4) continue;
+    const inVA = i >= va0 && i <= va1;
+    let rgb, alpha;
+    if(S.profileMode === "heat"){
+      // Value Area in Creme bis Weiss, ausserhalb gedaempftes
+      // Schiefergrau. Die Staerke steckt schon in der Balkenlaenge - die
+      // Farbe muss sie nicht ein zweites Mal erzaehlen und traegt
+      // stattdessen die Frage, die man beim Blick auf ein Volumenprofil
+      // zuerst stellt: liegt dieser Preis drinnen oder draussen.
+      const t = w/1000;
+      rgb = inVA ? cream.map(x=> Math.round(x + (255-x)*t*0.55)) : slate;
+      alpha = inVA ? 0.58 + 0.40*t : 0.26 + 0.30*t;
+    } else {
+      // Rollenfarben: Faerbung nach gehandelter Optionsseite. Die
+      // Empfindlichkeit ist auf 25 Prozentpunkte um die Mitte gestellt,
+      // nicht auf die vollen 0 bis 100. Gemessen schwankt der
+      // Call-Anteil je Band real zwischen 31 und 59 Prozent - gegen die
+      // volle Skala gerechnet blieb ein Farbausschlag von einem Drittel
+      // uebrig und das ganze Profil sah einheitlich grau aus.
+      const t = Math.max(-1, Math.min(1, ((CS[i]==null?50:CS[i]) - 50)/25));
+      const to = t >= 0 ? gold : violet, kk = Math.abs(t);
+      rgb = flat.map((f,j)=> Math.round(f + (to[j]-f)*kk));
+      alpha = inVA ? 0.50 : 0.24;
+    }
+    g.fillStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})`;
+    // Band 0 liegt beim TIEFSTEN Preis, die Bildzeile 0 aber oben -
+    // also von unten nach oben fuellen. Andersherum stuende das Profil
+    // auf dem Kopf und der POC laege am falschen Ende.
+    g.fillRect(0, (nB-1-i)*rh, bw2*w/1000, rh+ueber);
+  }
+  _vpCache = {vp, k, c};
+  return c;
+}
+
+function drawProfile(ctx, y, pw, ph, topPad, V){
+  const vp = S.data.vp;
+  const maxW = Math.min(pw*0.19, 74);
+
+  // Value Area ueber die ganze Chartbreite, nicht nur hinter dem Profil.
+  // Sie ist eine Aussage ueber den Kursbereich, nicht ueber den Streifen:
+  // hier liefen 70 Prozent des Volumens, und der Kurs kehrt dorthin
+  // ueberdurchschnittlich oft zurueck.
+  if(S.layers.va && vp.val && vp.vah){
+    const y1=Math.min(y(vp.vah), y(vp.val)), y2=Math.max(y(vp.vah), y(vp.val));
+    const h=Math.abs(y2-y1);
+    const g=ctx.createLinearGradient(0,y1,0,y2);
+    g.addColorStop(0,   "rgba(158,71,86,.05)");
+    g.addColorStop(0.5, "rgba(158,71,86,.15)");
+    g.addColorStop(1,   "rgba(158,71,86,.05)");
+    ctx.fillStyle=g; ctx.fillRect(0, y1, pw, h);
+    // Kanten: VAH und VAL sind die Marken, an denen sich entscheidet,
+    // ob der Kurs in der Spanne bleibt oder sie verlaesst.
+    ctx.strokeStyle=V("--va"); ctx.globalAlpha=.55; ctx.lineWidth=1;
+    ctx.setLineDash([3,4]);
+    [y1,y2].forEach(yy=>{
+      const ly=snap(yy)+half();
+      ctx.beginPath(); ctx.moveTo(0,ly); ctx.lineTo(pw,ly); ctx.stroke();
+    });
+    ctx.setLineDash([]); ctx.globalAlpha=1;
+    ctx.font="8px "+V("--mono"); ctx.fillStyle=V("--va"); ctx.textAlign="right";
+    ctx.globalAlpha=.85;
+    ctx.fillText("VAH", pw-4, y1+10); ctx.fillText("VAL", pw-4, y2-4);
+    ctx.globalAlpha=1; ctx.textAlign="left";
+  }
+
+  // Baender: einmal gezeichnet, danach kopiert.
+  //
+  // Bei 1000 Baendern waren das 1000 Fuellbefehle JE BILD, dazu je Band
+  // zwei Feldabbildungen und ein zusammengesetzter Farbtext. Gemessen
+  // kostete das Profil allein 9,6 der 23 Millisekunden eines Bildes -
+  // und es aenderte sich dabei nie: die Baender haengen am Profil und an
+  // der Farbwahl, nicht am Ausschnitt.
+  //
+  // Deshalb wird der Streifen in seinem EIGENEN Raster vorgezeichnet -
+  // ein Bildpunkt Hoehe je Band, also 1000 Zeilen - und danach als ein
+  // einziges Bild auf die Preisskala gedehnt. Weil Preis und Bandindex
+  // linear zusammenhaengen, ist das genau dieselbe Abbildung wie vorher,
+  // nur in einem Befehl statt in tausend. Die Glaettung der Leinwand
+  // mischt beim Verkleinern die Zeilen - was der frueher handgerechnete
+  // Ueberstand erzwingen sollte, macht sie von sich aus richtig.
+  const yTop = y(vp.lo + vp.step*(vp.bins_n || 1000));
+  const yBot = y(vp.lo);
+  const streifen = profilStreifen(vp, maxW, Math.round((yBot-yTop)*dpr));
+  if(streifen){
+    if(yBot > yTop){
+      ctx.save();
+      ctx.beginPath(); ctx.rect(0, topPad, pw, ph); ctx.clip();
+      ctx.drawImage(streifen, 0, yTop, maxW, yBot - yTop);
+      ctx.restore();
+    }
+  }
+
+  // POC: die Zeile, an der am meisten umging
+  if(vp.poc){
+    const yy = snap(y(vp.poc))+half();
+    ctx.strokeStyle=V("--pivot"); ctx.lineWidth=1.4; ctx.globalAlpha=.95;
+    ctx.beginPath(); ctx.moveTo(0,yy); ctx.lineTo(maxW+10,yy); ctx.stroke();
+    ctx.globalAlpha=1;
+    ctx.font="8px "+V("--mono"); ctx.fillStyle=V("--pivot"); ctx.textAlign="left";
+    ctx.fillText("POC", maxW+13, yy+3);
+  }
+  // Knoten und Vakuum am linken Rand markieren
+  (vp.hvn||[]).forEach(n=>{
+    const yy=snap(y(n.p))+half();
+    if(yy<topPad||yy>topPad+ph) return;
+    ctx.strokeStyle=V("--ink-dim"); ctx.globalAlpha=.7; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(0,yy); ctx.lineTo(7,yy); ctx.stroke(); ctx.globalAlpha=1;
+  });
+  (vp.lvn||[]).forEach(n=>{
+    const yy=snap(y(n.p))+half();
+    if(yy<topPad||yy>topPad+ph) return;
+    ctx.strokeStyle=V("--warn"); ctx.globalAlpha=.55; ctx.lineWidth=1;
+    ctx.setLineDash([2,3]);
+    ctx.beginPath(); ctx.moveTo(0,yy); ctx.lineTo(maxW*0.5,yy); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha=1;
+  });
+}
+
+/** Vorgezeichnete Orbs mit Leuchtkern.
+
+    Ein radialer Verlauf je Punkt waere bei ueber tausend Orbs zu teuer.
+    Stattdessen wird je Farbe und gerasterter Groesse einmal ein Sprite
+    gezeichnet und danach nur noch kopiert - das haelt das Schieben
+    fluessig und gibt trotzdem echtes Leuchten statt flacher Kreise. */
+const ORB_SPRITES = new Map();
+function orbSprite(color, r){
+  const key = color+"|"+r+"|"+dpr;
+  let sp = ORB_SPRITES.get(key);
+  if(sp) return sp;
+  // Eine Perle, kein Leuchten. Die Vorlage besteht aus abzaehlbaren
+  // Punkten mit klarer Kante; der weiche Verlauf von vorher liess sie zu
+  // einem durchgehenden Schlauch verschmelzen, in dem sich nichts mehr
+  // unterscheiden liess. Der Farbverlauf reicht deshalb nur noch knapp
+  // ueber den Rand - gerade genug gegen Treppenstufen, nicht so weit,
+  // dass benachbarte Perlen ineinanderlaufen.
+  const pad = r*1.22, size = Math.ceil(pad*2*dpr);
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const g = c.getContext("2d");
+  g.setTransform(dpr,0,0,dpr,0,0);
+  const cx = pad, cy = pad;
+  const grad = g.createRadialGradient(cx,cy,0, cx,cy,pad);
+  grad.addColorStop(0,    color);
+  grad.addColorStop(0.80, color);
+  grad.addColorStop(0.92, color+"AA");
+  grad.addColorStop(1,    color+"00");
+  g.fillStyle = grad;
+  g.beginPath(); g.arc(cx,cy,pad,0,6.2832); g.fill();
+  sp = {canvas:c, pad};
+  ORB_SPRITES.set(key, sp);
+  return sp;
+}
+
+/** Alles, was an Waenden und Spuren haengt und nicht am Ausschnitt.
+
+    Diese Rechnung lief bisher in jedem Bild: zwei Karten aufbauen, ueber
+    alle Stuetzstellen laufen, eine Liste sortieren. Waehrend eines Wischs
+    also sechzig mal je Sekunde - fuer ein Ergebnis, das sich nur aendert,
+    wenn neue Spurdaten eintreffen. Das ist einmal je Nachladen.
+
+    Staerke einer Wand als NOMINAL, nicht als Kontraktzahl.
+
+    Die Helligkeit vergleicht Waende ueber Ketten hinweg, und Kontrakte
+    sind nicht ueberall gleich gross: ein NDX-Kontrakt laeuft auf 100
+    Indexpunkte, ein QQQ-Kontrakt auf 100 Anteile - das 41-fache je
+    Stueck. Gegen ein gemeinsames Maximum aus Kontraktzahlen gerechnet
+    erschien die staerkste NDX-Wand mit 3.511 Kontrakten neben QQQ mit
+    235.246 bei 1,5 Prozent Helligkeit, also gar nicht. Sie war da, nur
+    unsichtbar. In Nominal sind es 10,6 gegen 20,1 Mrd - Faktor 1,9
+    statt 78. Und das ist auch die richtige Groesse: eine Wand wirkt,
+    weil der Dealer dagegen absichern muss, und wieviel er kaufen oder
+    verkaufen muss, haengt am Geld, nicht an der Zahl der Tickets.
+
+    PULS: was in DIESEN zwei Minuten am Strike geschah.
+
+    Das Band war bisher ueber den ganzen Tag gleich hell, und das war
+    kein Darstellungsfehler, sondern eine Folge der Datenlage: moduliert
+    wurde mit dem Open Interest, und der steht waehrend der Sitzung
+    still - die OCC rechnet ihn ueber Nacht. Gemessen an einem 0DTE-Call
+    mit 731 Kontrakten Tagesumsatz und Open Interest null ist das kein
+    Zweifelsfall. Ein Band aus OI KANN nicht atmen.
+
+    Das gehandelte Volumen laeuft dagegen live mit. Es ist ueber den Tag
+    kumuliert, also sagt erst die DIFFERENZ zweier Stuetzstellen, was
+    gerade passiert. Die Groessenordnung rechtfertigt den Aufwand: im
+    Band um den Kurs wurden heute 76.858 Kontrakte gehandelt gegen
+    39.136 stehendes OI - 196 Prozent Umschlag.
+
+    Bezug ist das 95. Perzentil, nicht das Maximum - dieselbe Lehre wie
+    beim Volumenprofil. Gemessen: ein einzelner Sprung von 161.995 gegen
+    einen Median von 29. Gegen dieses Maximum normiert waere jeder echte
+    Schub auf zwei Promille Helligkeit gefallen. */
+const nomWand = (oi, strike) => oi * 100 * (strike || 1);
+let _orbCache = {w:null, t:null, v:null};
+function orbVorberechnung(walls, tracks){
+  if(_orbCache.w === walls && _orbCache.t === tracks) return _orbCache.v;
+  const rec = new Map(), puls = new Map(), alle = [];
+  let peak = 0;
+  tracks.forEach(tk=>{
+    const pts = tk.points;
+    for(let i=0;i<pts.length;i++){
+      const q = pts[i];
+      rec.set(`${tk.chain}|${tk.side}|${tk.strike}|${q.t}`, q);
+      const n = nomWand(q.oi, tk.strike);
+      if(n > peak) peak = n;
+      // Nur Zuwachs zaehlt. Faellt der kumulierte Wert (neuer Tag,
+      // Neustart der Bruecke), ist das kein Handel, sondern ein
+      // Zaehlerwechsel - und der darf nicht als Ausbruch aufleuchten.
+      const vPrev = i ? (pts[i-1].v || 0) : (q.v || 0);
+      const dv = Math.max(0, (q.v || 0) - vPrev);
+      puls.set(`${tk.chain}|${tk.side}|${tk.strike}|${q.t}`, dv);
+      if(dv > 0) alle.push(dv);
+    }
+  });
+  walls.forEach(w=>{ const n = nomWand(w.oi, w.strike); if(n > peak) peak = n; });
+  let v = null;
+  if(peak > 0){
+    alle.sort((a,b)=>a-b);
+    const pulsPeak = alle.length
+      ? Math.max(alle[Math.min(alle.length-1, Math.floor(alle.length*0.95))], 1)
+      : 0;
+    v = {rec, puls, peak, pulsPeak};
+  }
+  _orbCache = {w:walls, t:tracks, v};
+  return v;
+}
+
+/** Wand-Verlauf als Orb-Ketten: x = Zeit, y = Preis, Radius = Bestand.
+    Eine Linie sagt, wo die Wand liegt. Die Kette sagt zusaetzlich, ob
+    sie waechst oder zerfaellt. */
+/** Der WEG wandernder Marken - Zero-Gamma, Max Pain.
+
+    Bewusst eine Linie und keine Perlenkette. Die Kette taugt fuer eine
+    Wand, weil die auf ihrem Strike sitzt und sich nur ihre Staerke
+    aendert - jede Perle steht dann fuer denselben Preis. Das Zero-Gamma
+    sitzt auf keinem Strike: es ist die Nullstelle einer Kurve und
+    wandert mit der impliziten Vola. Eine Kette von Perlen auf
+    wechselnder Hoehe waere kein Band mehr, sondern Streusel.
+
+    Und es ist die Bewegung, die zaehlt. Dass das Zero-Gamma 58 Punkte
+    entfernt steht, ist eine Zahl; dass es dem Kurs seit einer Stunde
+    entgegenkommt, ist eine Aussage. */
+function drawPaths(ctx, bars, y, xT, pw, ph, V, topPad){
+  const paths = S.trails?.paths;
+  if(!paths || !bars.length) return;
+  const t0 = bars[0].t, t1 = bars[bars.length-1].t;
+  // Auf die Zeichenflaeche beschneiden. Ein wandernder Weg verlaesst sie
+  // haeufiger als eine waagerechte Wand - ohne Beschnitt lief er ueber
+  // die Zeitachse und die Werkzeugleiste hinaus.
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, topPad, pw, ph); ctx.clip();
+  const stil = {
+    flip:     {c:"--pivot",  w:1.3, dash:[3,3], lab:"Zero-Gamma"},
+    max_pain: {c:"--struct", w:1.0, dash:[1,4], lab:"Max Pain"},
+  };
+  Object.entries(paths).forEach(([name, pts])=>{
+    const st = stil[name]; if(!st || pts.length < 2) return;
+    const seg = pts.filter(q=>q.t >= t0 - 120 && q.t <= t1 + 120);
+    if(seg.length < 2) return;
+    ctx.strokeStyle = V(st.c); ctx.lineWidth = st.w;
+    ctx.setLineDash(st.dash); ctx.globalAlpha = .62;
+    ctx.beginPath();
+    let auf = false;
+    seg.forEach(q=>{
+      const x = xT(q.t), yy = y(q.p);
+      if(yy < topPad-40 || yy > topPad+ph+40){ auf = false; return; }
+      if(!auf){ ctx.moveTo(x, yy); auf = true; } else ctx.lineTo(x, yy);
+    });
+    ctx.stroke(); ctx.setLineDash([]);
+    // Der letzte Punkt bekommt einen Kopf, damit das Ende der Spur
+    // ablesbar ist und nicht im Nichts ausfranst.
+    const last = seg[seg.length-1], ly = y(last.p);
+    if(ly >= topPad-2 && ly <= topPad+ph+2){
+      ctx.globalAlpha = .9; ctx.fillStyle = V(st.c);
+      ctx.beginPath(); ctx.arc(xT(last.t), ly, 2.1, 0, 6.2832); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  });
+  ctx.restore();
+}
+
+/** Die Gamma-Kurve: Netto-Gamma ueber den Preis, quer gelegt.
+
+    Diese Funktion gab es nicht. Der Schalter "Gamma-Kurve" stand seit
+    jeher im Menue der Ebenen und rief sie auf - wer ihn umlegte, bekam
+    keinen Fehlerhinweis, sondern einen schwarzen Chart: der Aufruf brach
+    draw() ab, bevor eine einzige Kerze gezeichnet war, und blieb
+    abgebrochen, weil der Schalter gesetzt blieb.
+
+    Gelesen wird sie wie ein Profil, nur dass nicht Volumen nach rechts
+    steht, sondern Gamma - und zwar mit Vorzeichen. Gold heisst positiv:
+    dort daempfen die Absicherungen der Haendler die Bewegung. Violett
+    heisst negativ: dort verstaerken sie sie. Der Punkt dazwischen ist
+    das Zero-Gamma, und er ist der Grund fuer die ganze Darstellung -
+    eine Zahl sagt, wo es liegt, die Kurve sagt, wie steil der Uebergang
+    ist. Ein flacher Durchgang ist eine Grenze, die nichts kostet; ein
+    steiler ist eine Wand. */
+function drawGammaCurve(ctx, y, pw, ph, V, lo, hi, topPad){
+  const c = S.data?.curve;
+  if(!Array.isArray(c) || c.length < 3) return;
+  let m = 0;
+  for(const q of c){ const a = Math.abs(q.gex || 0); if(a > m) m = a; }
+  if(!(m > 0)) return;
+
+  // Rechte Haelfte der Flaeche: links steht das Volumenprofil.
+  const x0 = pw*0.68, amp = pw*0.20;
+  const gx = g => x0 + (Math.max(-1, Math.min(1, g/m))) * amp;
+
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, topPad, pw, ph); ctx.clip();
+
+  // Nulllinie. Ohne sie ist die Kurve eine Schlangenlinie ohne Bezug.
+  ctx.strokeStyle=V("--ink-faint"); ctx.globalAlpha=.4; ctx.lineWidth=1;
+  ctx.setLineDash([2,4]);
+  const zx=snap(x0)+half();
+  ctx.beginPath(); ctx.moveTo(zx,topPad); ctx.lineTo(zx,topPad+ph); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Abschnittweise fuellen statt in einem Zug: so faerbt sich jeder
+  // Abschnitt nach seinem eigenen Vorzeichen und der Wechsel braucht
+  // keine Sonderbehandlung.
+  for(let i=0;i<c.length-1;i++){
+    const a=c[i], b=c[i+1];
+    const ya=y(a.s), yb=y(b.s);
+    if((ya<topPad-30&&yb<topPad-30)||(ya>topPad+ph+30&&yb>topPad+ph+30)) continue;
+    ctx.fillStyle = ((a.gex||0)+(b.gex||0))/2 >= 0 ? V("--resist") : V("--support");
+    ctx.globalAlpha=.12;
+    ctx.beginPath();
+    ctx.moveTo(x0,ya); ctx.lineTo(gx(a.gex||0),ya);
+    ctx.lineTo(gx(b.gex||0),yb); ctx.lineTo(x0,yb);
+    ctx.closePath(); ctx.fill();
+  }
+
+  ctx.globalAlpha=.7; ctx.lineWidth=1.2; ctx.strokeStyle=V("--pivot");
+  ctx.beginPath();
+  c.forEach((q,i)=>{ const xx=gx(q.gex||0), yy=y(q.s);
+    i ? ctx.lineTo(xx,yy) : ctx.moveTo(xx,yy); });
+  ctx.stroke();
+
+  // Jeder Vorzeichenwechsel bekommt seinen Punkt. In der Regel ist es
+  // einer; sind es mehrere, ist genau das die Aussage.
+  for(let i=0;i<c.length-1;i++){
+    const ga=c[i].gex||0, gb=c[i+1].gex||0;
+    if((ga>=0) === (gb>=0)) continue;
+    const t=Math.abs(ga)/(Math.abs(ga)+Math.abs(gb) || 1);
+    const yy=y(c[i].s + (c[i+1].s - c[i].s)*t);
+    if(yy<topPad||yy>topPad+ph) continue;
+    ctx.globalAlpha=1; ctx.fillStyle=V("--pivot");
+    ctx.beginPath(); ctx.arc(x0,yy,2.6,0,6.2832); ctx.fill();
+    ctx.font="8px "+V("--mono"); ctx.textAlign="left";
+    ctx.fillText("γ = 0", x0+7, yy-4);
+  }
+  ctx.globalAlpha=1; ctx.textAlign="left"; ctx.restore();
+}
+
+function drawOrbs(ctx, bars, y, xT, pw, ph, V, topPad){
+  const walls = S.data?.leading_walls || [];
+  const tr = S.trails;
+  const tracks = (tr && tr.tracks) || [];
+  if(!walls.length && !tracks.length) return;
+  if(!bars.length) return;
+
+  const bucket = (tr && tr.bucket) || 120;
+  const t0 = bars[0].t, t1 = bars[bars.length-1].t;
+
+  // Waende und Spuren aendern sich nur beim Nachladen - die Rechnung
+  // dazu steht in orbVorberechnung() und wird gemerkt.
+  const vor = orbVorberechnung(walls, tracks);
+  if(!vor) return;
+  const {rec, puls, peak, pulsPeak} = vor;
+
+  // Schrittweite: nie enger als fuenfeinhalb Bildpunkte. Bei vier lagen
+  // die Perlen in ruhigen Abschnitten so dicht, dass sie trotz Luecke zu
+  // einer Linie verschwammen - und eine Linie sagt nichts darueber, ob
+  // dort etwas geschah. Erst mit sichtbarem Abstand bleibt die Kette
+  // abzaehlbar, und genau das ist der Punkt an einer Perlenkette.
+  // Wie weit zurueck darf das Band ueberhaupt behauptet werden?
+  //
+  // Gezeichnet wurde bisher ueber den ganzen sichtbaren Zeitraum. Auf
+  // der Minutenebene ist das richtig: die Wand steht seit heute frueh
+  // dort, und wo nicht gemessen wurde, ist die Perle blasser. Auf der
+  // TAGESEBENE mit drei Jahren im Bild wurde daraus eine Behauptung,
+  // die falsch ist - die Wand bei 30.000 gab es 2023 nicht, und das
+  // Band zog trotzdem quer durch den ganzen Chart.
+  //
+  // Zwei Tage sind die Grenze: so weit reicht ein Bestand, den man ohne
+  // Messung noch fortschreiben darf. Was aelter ist, wurde nicht
+  // erhoben und wird auch nicht gezeigt.
+  const VORLAUF = 2*86400;
+  const tStart = Math.max(t0, t1 - VORLAUF);
+  const pxPerSec = (pw) / Math.max(1, (t1 - tStart));
+  const step = Math.max(bucket, Math.ceil(5.5 / Math.max(pxPerSec, 1e-9) / bucket) * bucket);
+
+  walls.forEach(w=>{
+    const yy = y(w.price);
+    if(yy < topPad-6 || yy > topPad+ph+6) return;
+    const col = V(w.side === "call" ? "--resist" : "--support");
+    const isIndex = w.chain_kind === "Index";
+    const key = `${w.chain}|${w.side}|${w.strike}`;
+
+    for(let t = tStart; t <= t1 + bucket; t += step){
+      const x = xT(t);
+      if(x < -8 || x > pw + 8) continue;
+      // Gemessen oder angenommen? Ein aufgezeichneter Wert schlaegt den
+      // aktuellen Bestand, sonst gilt der aktuelle als Annahme.
+      const slot = t - (t % bucket);
+      const measured = rec.get(`${key}|${slot}`);
+      const oi = measured ? measured.oi : w.oi;
+      const rel = Math.min(1, nomWand(oi, w.strike) / peak);
+
+      // Der Puls dieses Zeitfensters. Wurzel statt linear, damit auch
+      // maessiger Handel sichtbar wird und nicht nur der eine Ausreisser
+      // des Tages alles andere flach druckt.
+      const dv = measured ? (puls.get(`${key}|${slot}`) || 0) : 0;
+      const imp = pulsPeak > 0 ? Math.sqrt(Math.min(1, dv / pulsPeak)) : 0;
+
+      // Das Fundament traegt die Groesse, der Puls legt darauf. So bleibt
+      // die Wand auch in einer stillen Minute sichtbar, statt zu
+      // verschwinden - sie ist ja weiter da, es geschieht nur nichts.
+      //
+      // Die Untergrenze lag vorher bei 1,1 Bildpunkten, und damit hatte
+      // JEDE Wand zu JEDER Zeit dieselbe Mindestdicke: aus dem Band wurde
+      // ein durchgehender Schlauch, und eine schwache Wand sah aus wie
+      // eine mittlere. Jetzt faellt die Groesse bis fast auf null, und
+      // unterhalb einer halben Perle wird gar nicht gezeichnet - so
+      // entstehen die Luecken und die einzelnen Punkte der Vorlage.
+      const staerke = Math.pow(rel, 0.7);
+      const r = Math.round((0.35 + 4.2*staerke + 3.0*imp) * 2) / 2;
+      if(r < 0.5) continue;
+      const sp = orbSprite(col, r);
+      // Nicht gemessene Abschnitte deutlich zurueckgenommen: das Band
+      // zeigt, DASS die Wand da ist, ohne eine Staerke zu behaupten,
+      // die nicht erhoben wurde.
+      const base = measured ? (0.16 + 0.62*staerke) : (0.08 + 0.34*staerke);
+      ctx.globalAlpha = Math.min(1, base + 0.42*imp);
+      ctx.drawImage(sp.canvas, x - sp.pad, yy - sp.pad, sp.pad*2, sp.pad*2);
+      // Der Index-Ring blieb aus: er zog um jede kraeftige Perle einen
+      // zweiten Kreis und machte aus der klaren Kette wieder ein
+      // Geflimmer. Woher eine Wand stammt, sagt die Wandliste.
+      void isIndex;
+    }
+  });
+  ctx.globalAlpha = 1;
+}
+
+/** Ruhige Ladeanzeige: ein Bogen, der laeuft, und ein Satz dazu.
+
+    Vorher stand hier "keine Kursdaten" - dieselben drei Woerter beim
+    Warten wie beim Ausfall. Der Unterschied ist aber der wichtigste:
+    beim einen soll man warten, beim anderen nachsehen. Also zwei
+    Zustaende, zwei Bilder, und der laufende Bogen sagt ohne Worte, dass
+    etwas passiert.
+
+    Der Bogen laeuft nur, solange geladen wird. Eine Zeichenschleife, die
+    im Hintergrund weiterdreht, kostet auf einem Telefon Akku fuer ein
+    Bild, das niemand ansieht. */
+let ladeRaf = 0;
+function ladeBild(V){
+  const cx = W/2, cy = (H-PAD.b)/2 + PAD.t;
+  const fehler = S.ladeFehler;
+  ctx.textAlign = "center";
+  if(!fehler){
+    const t = performance.now()/1000;
+    const r = 15;
+    ctx.lineWidth = 2.4; ctx.lineCap = "round";
+    ctx.strokeStyle = V("--panel-3");
+    ctx.beginPath(); ctx.arc(cx, cy-14, r, 0, 6.2832); ctx.stroke();
+    ctx.strokeStyle = V("--resist"); ctx.globalAlpha = .95;
+    const a0 = (t*1.9) % 6.2832;
+    ctx.beginPath(); ctx.arc(cx, cy-14, r, a0, a0 + 1.5 + Math.sin(t*1.3)*0.55);
+    ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.fillStyle = V("--ink-dim"); ctx.font = "13px "+V("--sans");
+    ctx.fillText("Kursdaten werden geholt", cx, cy+22);
+    ctx.fillStyle = V("--ink-faint"); ctx.font = "11px "+V("--sans");
+    ctx.fillText(SYM[S.market] ? SYM[S.market]+" · "+S.tf : S.tf, cx, cy+40);
+    if(!ladeRaf) ladeRaf = requestAnimationFrame(()=>{ ladeRaf = 0; draw(); });
+  } else {
+    ctx.fillStyle = V("--warn"); ctx.font = "13px "+V("--sans");
+    ctx.fillText("keine Kursdaten", cx, cy-6);
+    ctx.fillStyle = V("--ink-faint"); ctx.font = "11px "+V("--sans");
+    ctx.fillText(esc(fehler), cx, cy+14);
+    ctx.fillText("wird weiter versucht", cx, cy+32);
+  }
+  ctx.textAlign = "left";
+}
+
+function draw(){
+  const V=n=>TH[n]||"";
+  ctx.clearRect(0,0,W,H);
+  const alle=S.data?.bars||[];
+  if(!alle.length){ ladeBild(V); return; }
+  // Sind die juengsten Balken von heute? Entscheidet weiter unten ueber
+  // das Datum auf der Achse und hier oben ueber das Sitzungsschild.
+  const nichtHeuteOben =
+    new Date(alle[alle.length-1].t*1000).toDateString() !== new Date().toDateString();
+  const topPad = PAD.t + (S.immersive ? 6 : CHROME*0.42);
+  const pw=W-PAD.r, ph=H-PAD.b-topPad;
+  // Grund mit leichtem Verlauf statt Flaeche - die Kerzen stehen dadurch
+  // freier, ohne dass eine zweite Farbe ins Spiel kommt. Gebacken.
+  const HG = hintergrund(topPad, pw, ph);
+  ctx.drawImage(HG.grund, 0, 0, W, H);
+
+  // Der Ausschnitt ist ein Bruch, und er wird auch als Bruch gezeichnet.
+  //
+  // Vorher schnitt vbars() die sichtbaren Balken heraus und die Breite
+  // ergab sich aus ihrer ANZAHL. Damit war jede Zwischenstellung
+  // verloren: ein Wisch von 120 Bildpunkten erzeugte gemessen 25
+  // verschiedene Bilder statt eines je Bildaufbau - der Chart sprang in
+  // Stufen von einem Balken, statt dem Finger zu folgen. Und weil die
+  // Anzahl zwischen 71 und 72 wechselte, aenderte sich bei jedem Sprung
+  // zugleich die Balkenbreite und alles zuckte.
+  //
+  // Jetzt bestimmt die SPANNE die Breite, und die Lage jedes Balkens
+  // haengt an seinem absoluten Index. i0 darf beliebig krumm sein.
+  const vw = S.vw || {i0:0, i1:alle.length};
+  const sp = Math.max(1e-6, vw.i1 - vw.i0);
+  const bw = pw / sp;
+  const X  = i => (i - vw.i0 + 0.5) * bw;        // Mitte von Balken i
+  const iL = Math.max(0, Math.floor(vw.i0) - 1);
+  const iR = Math.min(alle.length - 1, Math.ceil(vw.i1) + 1);
+  const bars = alle.slice(iL, iR + 1);
+  if(!bars.length) return;
+  const xT = ts => X(tToI(ts, alle));
+
+  let lo=Infinity, hi=-Infinity;
+  for(let i=0;i<bars.length;i++){
+    if(bars[i].l < lo) lo = bars[i].l;
+    if(bars[i].h > hi) hi = bars[i].h;
+  }
+  const lv=chartLevelsCached(), range=(hi-lo)||1;
+  const slack = S.fitAll ? Infinity : range*0.45;
+  const loL=lo-slack, hiL=hi+slack;
+  const barLo=lo, barHi=hi, barRange=(barHi-barLo)||1;
+  lv.forEach(l=>{ if(l.p>=loL&&l.p<=hiL){ lo=Math.min(lo,l.p); hi=Math.max(hi,l.p); }});
+  if(S.data.spot){ lo=Math.min(lo,S.data.spot); hi=Math.max(hi,S.data.spot); }
+  // Harte Klemme statt Schwellenwert: ein Level darf die Skala um
+  // hoechstens ein Viertel der Kerzenspanne je Seite aufziehen. Damit
+  // gehoeren den Kerzen immer mindestens zwei Drittel des Bildes, und
+  // was weiter weg liegt, sagt die Randmarke.
+  if(!S.fitAll){
+    lo = Math.max(lo, barLo - barRange*0.25);
+    hi = Math.min(hi, barHi + barRange*0.25);
+  } else {
+    // "Alles zeigen" hiess woertlich alles - und das war der Fehler.
+    //
+    // Gemessen: die Skala sprang von 183 auf 3.276 Punkte, weil die
+    // Put-Wand bei 27.500 und die Call-Wand bei 30.000 mit hineingezogen
+    // wurden. Die Kerzen des Tages umfassen 183 Punkte, also 5,6 Prozent
+    // davon - ein verwaschener Streifen, in dem keine einzelne Kerze
+    // mehr zu erkennen war. Der Chart sah kaputt aus, nicht
+    // herausgezoomt, und genau so wurde er auch gemeldet.
+    //
+    // Auch die weiteste Ansicht muss den Kurs noch zeigen. Das
+    // Sechsfache der Kerzenspanne laesst ihnen ein Sechstel der Hoehe -
+    // genug, um eine Kerze als Kerze zu lesen - und zeigt trotzdem ein
+    // Vielfaches dessen, was die normale Ansicht zeigt. Was danach noch
+    // ausserhalb liegt, nennt die Randmarke; die ist dafuer jetzt auch
+    // in dieser Ansicht eingeschaltet.
+    const mitte = S.data.spot != null ? S.data.spot : (barLo + barHi) / 2;
+    const halb = barRange * 3;
+    lo = Math.max(lo, Math.min(barLo, mitte - halb));
+    hi = Math.min(hi, Math.max(barHi, mitte + halb));
+  }
+
+  // Der Kurs steht in der Mitte, und zwar immer.
+  //
+  // Vorher folgte die Skala allein der Kerzenspanne, und der Kurs landete,
+  // wo er landete - am Tageshoch klebte er oben am Rand, am Tagestief
+  // unten. Genau dann ist er aber am wichtigsten, und genau dann sah man
+  // in die Richtung, in die er sich bewegte, am wenigsten Platz.
+  //
+  // Gespiegelt wird um den Kurs: der halbe Ausschnitt ist so gross wie
+  // der weiteste Abstand vom Kurs zu einer Kerze. Damit ist jede Kerze
+  // vollstaendig im Bild - das ist die zweite Bedingung - und oben wie
+  // unten steht gleich viel Raum.
+  //
+  // Der Preis dafuer ist ehrlich zu benennen: steht der Kurs am Rand der
+  // Tagesspanne, bleibt die Gegenseite leer. Das ist keine Verschwendung,
+  // sondern die Aussage - der Raum zeigt, wie weit es zurueck zur anderen
+  // Seite ist.
+  if(!S.fitAll && S.data.spot){
+    const c = S.data.spot;
+    // Zwei Halbspannen: eine, die nur die Kerzen fasst, und eine, die
+    // auch die nahen Level einschliesst.
+    const halfBars = Math.max(c - barLo, barHi - c, barRange * 0.10);
+    const halfLv   = Math.max(c - lo, hi - c);
+    // Die Level duerfen mitziehen, aber nur um ein Drittel. Ohne diese
+    // Grenze bestimmte ein Level die Skala und das Spiegeln verdoppelte
+    // seinen Einfluss noch: gemessen blieben den Kerzen 47 Prozent der
+    // Hoehe. Das Zentrieren allein kostet nicht so viel - es war das
+    // Level, und was ausserhalb bleibt, sagt ohnehin die Randmarke.
+    const half = Math.max(halfBars, Math.min(halfLv, halfBars * 1.35));
+    lo = c - half; hi = c + half;
+  }
+  const pd=(hi-lo)*0.06||1; lo-=pd; hi+=pd;
+
+  // Was die Automatik ergeben haette, bleibt gemerkt. Greift der Finger
+  // an die Skala, faengt sie genau hier an - ohne Sprung.
+  S.autoScale = {lo, hi};
+  // Von Hand gesetzt schlaegt automatisch. Sonst waere jede Bewegung an
+  // der Preisachse im naechsten Bild wieder weggerechnet.
+  if(S.vs){
+    lo = S.vs.lo; hi = S.vs.hi;
+    if(!(hi > lo)){ S.vs = null; lo = S.autoScale.lo; hi = S.autoScale.hi; }
+  }
+  const y=p=>topPad+(hi-p)/(hi-lo)*ph;
+  const pAt=yy=>hi-(yy-topPad)/ph*(hi-lo);   // Umkehrung, fuer die Gesten
+  S.geo = {topPad, ph, pw, bw, lo, hi, y, pAt};
+
+  // Preisleiter. Die Marken der Level sagen, WO etwas liegt; erst die
+  // Leiter sagt, WIEVIEL dazwischen liegt. Ohne sie war der rechte Rand
+  // eine Sammlung von Schildern ohne Massstab.
+  //
+  // Gerechnet wird in Brokerpreisen, nicht in Indexpreisen: runde Zahlen
+  // sind nur dort rund, wo sie auch gelesen werden. Um einen Versatz von
+  // 69 Punkten verschoben waere aus 29.200 sonst 29.269 geworden - eine
+  // Leiter aus krummen Zahlen.
+  const off = S.off || 0;
+  const tick = niceStep((hi-lo), Math.max(3, Math.min(9, Math.round(ph/54))));
+  const t0T = Math.ceil((lo+off)/tick)*tick, t1T = (hi+off);
+  const dez = tick < 1 ? Math.min(4, Math.ceil(-Math.log10(tick))) : 0;
+  ctx.strokeStyle=V("--line-soft"); ctx.lineWidth=1; ctx.globalAlpha=.55;
+  ctx.beginPath();
+  for(let p=t0T; p<=t1T; p+=tick){
+    const yy=snap(y(p-off))+half();
+    if(yy<topPad||yy>topPad+ph) continue;
+    ctx.moveTo(0,yy); ctx.lineTo(pw,yy);
+  }
+  ctx.stroke(); ctx.globalAlpha=1;
+
+  if(S.layers.profil && S.data.vp?.w) drawProfile(ctx, y, pw, ph, topPad, V);
+  if(S.layers.tpo) drawTPO(ctx, y, pw, ph, topPad, V);
+  if(S.layers.orbs) drawPaths(ctx, bars, y, xT, pw, ph, V, topPad);
+  if(S.layers.zonen) (S.data.zones||[]).forEach(z=>{
+    const y1=y(z.top),y2=y(z.bot);
+    const c = z.role==="resist"?"224,169,60" : z.role==="support"?"169,123,232" : "207,198,178";
+    ctx.fillStyle=`rgba(${c},.075)`; ctx.fillRect(0,y1,pw,Math.max(1.5,y2-y1));
+  });
+
+  if(S.layers.gcurve) drawGammaCurve(ctx, y, pw, ph, V, lo, hi, topPad);
+  if(S.layers.orbs) drawOrbs(ctx, bars, y, xT, pw, ph, V, topPad);
+
+  const upC=V("--up"), dnC=V("--down");
+  // Ein createLinearGradient JE KERZE waren bei 389 Kerzen 389 neue
+  // Verlaufsobjekte in jedem Bild. Der Verlauf laeuft waagerecht ueber
+  // die Koerperbreite und die ist fuer alle Kerzen gleich - also einmal
+  // bauen, bei 0 beginnend, und den Koerper darunter schieben.
+  // ... und nur, solange ein Koerper ueberhaupt breit genug ist, dass
+  // man einen Verlauf darin sehen kann. Bei fuenf Bildpunkten Abstand
+  // ist der Koerper drei Punkte breit - darin ist ein Verlauf keine
+  // Plastizitaet, sondern ein Rechenposten. Das Sichern und
+  // Zuruecksetzen des Zustands je Kerze schlug mit 9 Prozent der
+  // Bildzeit zu Buche, fuer etwas Unsichtbares.
+  const cwG = Math.max(1.3, (pw/sp)*0.6);
+  const breit = cwG >= 6;
+  const koerperG = col => {
+    const g = ctx.createLinearGradient(0,0,cwG,0);
+    g.addColorStop(0, col); g.addColorStop(1, col+"CC");
+    return g;
+  };
+  const gUp = breit?koerperG(upC):null, gDn = breit?koerperG(dnC):null;
+  bars.forEach((b,k)=>{
+    const x=X(iL+k)-bw/2, cw=Math.max(1.3,bw*0.6), up=b.c>=b.o;
+    const col = up?upC:dnC;
+    // Docht auf das Geraetepixel rasten, sonst franst eine 1px-Linie aus
+    const wx = snap(x+bw/2)+half();
+    // Runde Kappe statt der Standardkappe: bei starkem Herauszoomen
+    // fallen Hoch und Tief auf denselben Geraetepixel, aus dem Docht
+    // wird eine Strecke der Laenge null - und die zeichnet mit der
+    // Standardkappe GAR NICHTS. Mit runder Kappe bleibt an dieser
+    // Stelle wenigstens ein Punkt in Linienbreite stehen. Eine Kerze
+    // verschwindet damit nie restlos, egal wie weit die Skala steht.
+    ctx.strokeStyle=col; ctx.lineWidth=Math.max(1/dpr, bw*0.055); ctx.lineCap="round";
+    ctx.beginPath(); ctx.moveTo(wx,snap(y(b.h))); ctx.lineTo(wx,snap(y(b.l))); ctx.stroke();
+    ctx.lineCap="butt";
+    const t=snap(y(Math.max(b.o,b.c))), bo=snap(y(Math.min(b.o,b.c)));
+    const h=Math.max(1/dpr, bo-t), bx=snap(x+(bw-cw)/2);
+    // Leichter Verlauf im Koerper: gibt der Kerze Volumen, ohne dass die
+    // Farbe ihre Bedeutung verliert
+    if(h > 3 && breit){
+      ctx.save(); ctx.translate(bx, 0);
+      ctx.fillStyle = up?gUp:gDn; ctx.fillRect(0, t, cw, h);
+      ctx.restore();
+    } else { ctx.fillStyle=col; ctx.fillRect(bx, t, cw, h); }
+  });
+
+  // Die Achse selbst: Trennstrich und Zahlen. Nach den Kerzen gezeichnet,
+  // damit kein Docht hineinragt, und vor den Level-Schildern, damit diese
+  // eine Zahl verdecken duerfen statt umgekehrt.
+  ctx.fillStyle=V("--ground"); ctx.globalAlpha=.72;
+  ctx.fillRect(pw, topPad-PAD.t, PAD.r, ph+PAD.t+PAD.b);
+  ctx.globalAlpha=1;
+  ctx.strokeStyle=V("--line"); ctx.lineWidth=1; ctx.globalAlpha=.7;
+  const axX=snap(pw)+half();
+  ctx.beginPath(); ctx.moveTo(axX,topPad-PAD.t); ctx.lineTo(axX,topPad+ph); ctx.stroke();
+  ctx.globalAlpha=1;
+  ctx.fillStyle=V("--ink-faint"); ctx.font="9px "+V("--mono"); ctx.textAlign="left";
+  for(let p=t0T; p<=t1T; p+=tick){
+    const yy=y(p-off);
+    if(yy<topPad+6||yy>topPad+ph-4) continue;
+    ctx.strokeStyle=V("--line"); ctx.globalAlpha=.8;
+    ctx.beginPath(); ctx.moveTo(axX,snap(yy)+half()); ctx.lineTo(axX+3,snap(yy)+half()); ctx.stroke();
+    ctx.globalAlpha=1;
+    ctx.fillText(fmt(p, dez), pw+6, yy+3);
+  }
+
+  // Steht die Skala von Hand, sagt das ein Schalter am Fuss der Achse.
+  // Eine Ansicht, aus der man nicht zurueckfindet, ist eine Falle.
+  S.autoBtn = null;
+  // Der Schalter erscheint, sobald irgendetwas von Hand steht - die
+  // Skala ODER der Ausschnitt. Nur an der Skala festgemacht waere er
+  // nach einem reinen Seitwaertswisch weg gewesen, und dann gaebe es
+  // keinen Weg zurueck zum Kurs.
+  // S.fitAll gehoert dazu. Ohne ihn erschien in der weiten Ansicht gar
+  // kein AUTO - und das war der Zustand, in dem man ihn am dringendsten
+  // braucht: die Kerzen sind klein, nichts sieht mehr vertraut aus, und
+  // der einzige Weg zurueck waere derselbe Knopf gewesen, den man als
+  // Ursache nicht erkannt hat.
+  const vonHand = !!S.vs || S.fitAll || (S.vw && alle.length
+      && (S.vw.i1 < alle.length - 0.6 || S.vw.i0 > alle.length - sp*(1-LUFT*0.5)));
+  if(vonHand){
+    const bw2=PAD.r-6, bh=13, bx=pw+3, by=topPad+ph-bh-2;
+    ctx.fillStyle=V("--pivot"); ctx.globalAlpha=.9;
+    ctx.fillRect(bx, by, bw2, bh); ctx.globalAlpha=1;
+    ctx.fillStyle=V("--ground"); ctx.font="600 8.5px "+V("--mono"); ctx.textAlign="center";
+    ctx.fillText("AUTO", bx+bw2/2, by+9);
+    ctx.textAlign="left";
+    S.autoBtn = {x:bx, y:by, w:bw2, h:bh};
+  }
+
+  const used=[], usedBox=[];
+  lv.sort((a,b)=>a.p-b.p).forEach(l=>{
+    const yy=y(l.p); if(yy<topPad-2||yy>topPad+ph+2) return;
+    const c=V(l.c);
+    ctx.globalAlpha=l.dim??1; ctx.strokeStyle=c; ctx.lineWidth=l.w; ctx.setLineDash(l.dash||[]);
+    const ly = snap(yy)+half();
+    ctx.beginPath(); ctx.moveTo(0,ly); ctx.lineTo(pw,ly); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha=1;
+    if(!l.badge) return;
+    let by=yy; while(used.some(u=>Math.abs(u-by)<11)) by+=11;
+    used.push(by);
+    ctx.fillStyle=c; ctx.fillRect(pw+2, by-6.5, PAD.r-4, 12.5);
+    ctx.fillStyle=V("--ground"); ctx.font="600 9.5px "+V("--mono"); ctx.textAlign="left";
+    ctx.fillText(px(l.p), pw+5, by+2.5);
+    if(l.lab && !S.layers.gpbox){
+      ctx.fillStyle=c; ctx.font="8.5px "+V("--mono"); ctx.textAlign="right";
+      ctx.globalAlpha=.9; ctx.fillText(l.lab, pw-4, by-1); ctx.globalAlpha=1;
+    }
+    // Beschriftungskasten in der Art der Desktop-Vorlage: Bezeichnung
+    // oben, Preis darunter, direkt am Level statt nur an der Skala.
+    if(l.lab && S.layers.gpbox){
+      ctx.font="7.5px "+V("--mono");
+      const w1=textW(ctx, l.lab);
+      ctx.font="600 9px "+V("--mono");
+      const w2=textW(ctx, px(l.p));
+      // Rechts neben dem Profil absetzen, nicht darauf - im Desktop
+      // stehen die Kaesten ebenfalls frei.
+      const profW = S.layers.profil ? Math.min(pw*0.19, 74) + 8 : 6;
+      const bw2=Math.max(w1,w2)+10;
+      // Dicht liegende Kaesten nach unten ausweichen lassen, sonst
+      // ueberdeckt der eine den anderen und beide sind unlesbar.
+      let byB = yy, bx = profW, guard = 0;
+      while(usedBox.some(u=>Math.abs(u.y-byB)<25 && Math.abs(u.x-bx)<bw2+6) && guard++<2){
+        byB += 25;
+      }
+      // Mehr als zwei Schritte Versatz waeren kein Ausweichen mehr,
+      // sondern ein Kasten ohne erkennbaren Bezug - dann lieber keiner.
+      // Die Preisskala rechts zeigt das Level ohnehin.
+      // Der Chart laeuft absichtlich unter der Chrome weiter - ein
+      // Beschriftungskasten dort waere aber unlesbar.
+      const safeTop = (S.immersive ? topPad : CHROME) + 18;
+      const fits = guard <= 2
+        && byB > safeTop && byB < topPad + ph - 6
+        && bx + bw2 < pw - 30;
+      if(fits) usedBox.push({y:byB, x:bx});
+      if(fits){
+        // Verbinder, wenn der Kasten ausgewichen ist
+        if(Math.abs(byB-yy) > 1){
+          ctx.strokeStyle=c; ctx.globalAlpha=.4; ctx.lineWidth=1;
+          ctx.beginPath(); ctx.moveTo(bx+bw2/2, yy); ctx.lineTo(bx+bw2/2, byB-14); ctx.stroke();
+          ctx.globalAlpha=1;
+        }
+        ctx.fillStyle=V("--ink"); ctx.globalAlpha=.93;
+        ctx.fillRect(bx, byB-14, bw2, 12);
+        ctx.fillStyle=c; ctx.fillRect(bx, byB-2, bw2, 12);
+        ctx.globalAlpha=1;
+        ctx.fillStyle=V("--ground"); ctx.textAlign="left";
+        ctx.font="7.5px "+V("--mono"); ctx.fillText(l.lab, bx+5, byB-5);
+        ctx.font="600 9px "+V("--mono"); ctx.fillText(px(l.p), bx+5, byB+7);
+      }
+    }
+  });
+
+  // Level ausserhalb des Fensters als Randmarke. Die Skala dafuer
+  // aufzuziehen wuerde die Kerzen zu einem Strich stauchen - die Marke
+  // sagt dasselbe und kostet keinen Platz.
+  //
+  // Auch in der weiten Ansicht. Frueher war sie dort abgeschaltet, weil
+  // "alles zeigen" ja alles ins Bild holte; seit auch diese Ansicht eine
+  // Grenze hat, kann etwas ausserhalb liegen - und dann soll es genannt
+  // werden.
+  {
+    const off = lv.filter(l=>l.badge && (l.p > hi || l.p < lo));
+    const above = off.filter(l=>l.p > hi).sort((a,b)=>a.p-b.p).slice(0,3);
+    const below = off.filter(l=>l.p < lo).sort((a,b)=>b.p-a.p).slice(0,3);
+    ctx.font="9px "+V("--mono");
+    [[above,1],[below,-1]].forEach(([list,dir])=>{
+      list.forEach((l,i)=>{
+        const c=V(l.c);
+        const yy = dir>0 ? topPad+7+i*13 : topPad+ph-7-i*13;
+        const txt = (dir>0?"▲ ":"▼ ")+px(l.p);
+        const w = textW(ctx, txt)+9;
+        ctx.globalAlpha=.92; ctx.fillStyle=c;
+        ctx.fillRect(pw-w-3, yy-6, w, 12);
+        ctx.globalAlpha=1; ctx.fillStyle=V("--ground"); ctx.textAlign="left";
+        ctx.fillText(txt, pw-w+1, yy+3);
+        if(l.lab){
+          ctx.fillStyle=c; ctx.globalAlpha=.75; ctx.textAlign="right";
+          ctx.fillText(l.lab, pw-w-7, yy+3); ctx.globalAlpha=1;
+        }
+      });
+    });
+    ctx.textAlign="left";
+  }
+
+  if(S.data.spot){
+    const yy=y(S.data.spot);
+    if(yy>=topPad&&yy<=topPad+ph){
+      ctx.strokeStyle=V("--ink"); ctx.globalAlpha=.45; ctx.setLineDash([4,3]);
+      const sy=snap(yy)+half();
+      ctx.beginPath(); ctx.moveTo(0,sy); ctx.lineTo(pw,sy); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha=1;
+      ctx.fillStyle=V("--ink"); ctx.fillRect(pw+2,yy-7.5,PAD.r-4,15);
+      ctx.fillStyle=V("--ground"); ctx.font="700 10px "+V("--mono"); ctx.textAlign="left";
+      ctx.fillText(px(S.data.spot), pw+5, yy+3);
+    }
+  }
+  // Ein Schild fuer die alte Sitzung.
+  //
+  // Die Statuszeile sagt zwar "BOERSE ZU", aber sie sagt nicht, WELCHEN
+  // Tag man vor sich hat - und ein Minutenchart sieht immer aus wie
+  // jetzt. Solange die letzten Balken nicht von heute sind, steht es
+  // deshalb im Bild: welcher Tag, und wann es weitergeht.
+  //
+  // Es erscheint nur dann. Waehrend der Sitzung waere es ein Schild, das
+  // etwas Selbstverstaendliches behauptet, und damit nur im Weg.
+  if(nichtHeuteOben && alle.length){
+    const letzte = new Date(alle[alle.length-1].t*1000);
+    const c = S.data.clock || {};
+    const auf = c.next_ts ? new Date(c.next_ts*1000) : null;
+    // Was next_ts bedeutet, haengt davon ab, ob die Boerse offen ist:
+    // dann ist es der Schluss, sonst die naechste Eroeffnung. Blind
+    // "oeffnet" davorzuschreiben behauptete um 15:30, die Boerse oeffne
+    // um 22 Uhr - das ist der Handelsschluss.
+    const zeit = auf ? auf.toLocaleDateString("de-DE",{weekday:"short"})
+                       + " " + auf.toLocaleTimeString("de-DE",
+                         {hour:"2-digit",minute:"2-digit"}) : "";
+    const kopf = "Sitzung " + letzte.toLocaleDateString("de-DE",
+                   {weekday:"short", day:"2-digit", month:"2-digit"});
+    // Der Nachsatz in zwei Laengen. Das Schild ist mittig und darf nicht
+    // ueber die Zeichenflaeche hinauslaufen - auf einem 412 Punkte
+    // breiten Telefon schnitt der lange Text rechts ab und endete mit
+    // "verzoeger". Passt der lange nicht, kommt der kurze; passt auch
+    // der nicht, bleibt der Tag allein - der ist die eigentliche
+    // Aussage, alles andere steht ohnehin in der Statuszeile.
+    ctx.font = "600 10px "+V("--mono");
+    const lang = !auf ? "" : c.open ? " · Börse offen, Kerzen folgen verzögert"
+                                    : " · Börse öffnet " + zeit;
+    const kurz = !auf ? "" : c.open ? " · Kerzen folgen" : " · öffnet " + zeit;
+    const passt = t => textW(ctx, t) + 18 <= pw - 12;
+    const txt = passt(kopf + lang) ? kopf + lang
+              : passt(kopf + kurz) ? kopf + kurz : kopf;
+    const bw3 = textW(ctx, txt) + 18, bx3 = Math.max(6, (pw - bw3)/2);
+    // UNTER die Chrome setzen, nicht an den Anfang der Zeichenflaeche.
+    //
+    // Der Chart laeuft absichtlich unter Kopfzeile und Marktleiste
+    // weiter - das ist der gewonnene Platz. Ein Schild dort oben liegt
+    // aber hinter den Marktkacheln und war damit genau das, was es nicht
+    // sein darf: unlesbar. Die Statuszeile steht bei chrome+6 und ist
+    // 18 hoch, also beginnt der freie Streifen bei chrome+28.
+    const by3 = (S.immersive ? topPad + 6 : CHROME + 28);
+    ctx.fillStyle = V("--panel-2"); ctx.globalAlpha = .93;
+    ctx.fillRect(bx3, by3, bw3, 18);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = V("--line"); ctx.lineWidth = 1;
+    ctx.strokeRect(snap(bx3)+half(), snap(by3)+half(), bw3, 18);
+    ctx.fillStyle = V("--ink-dim"); ctx.textAlign = "center";
+    ctx.fillText(txt, bx3 + bw3/2, by3 + 12.5);
+    ctx.textAlign = "left";
+  }
+
+  if(S.cross!=null){
+    const i=Math.max(0,Math.min(alle.length-1,Math.round(S.cross)));
+    const b=alle[i], x=X(i);
+    ctx.strokeStyle=V("--ink-dim"); ctx.globalAlpha=.5; ctx.setLineDash([2,3]);
+    ctx.beginPath(); ctx.moveTo(x,topPad); ctx.lineTo(x,topPad+ph); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0,y(b.c)); ctx.lineTo(pw,y(b.c)); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha=1;
+    $("cross").className="cross on";
+    $("cross").innerHTML = `${new Date(b.t*1000).toLocaleString("de-DE",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}<br>`+
+      `O ${px(b.o)}&nbsp; H ${px(b.h)}<br>L ${px(b.l)}&nbsp; C ${px(b.c)}`;
+  } else $("cross").className="cross";
+
+  // Vignette: nimmt den Raendern Gewicht, damit die Mitte traegt
+  ctx.drawImage(HG.vig, 0, 0, W, H);
+
+  ctx.fillStyle=V("--ink-faint"); ctx.font="9px "+V("--mono");
+  const st=Math.max(1,Math.round(sp/4));
+  // Die zuletzt beschriftete Stelle, damit sich zwei Marken nicht
+  // ueberschreiben. Mit Datum sind die Beschriftungen fast doppelt so
+  // breit wie vorher, und am linken Rand wurde eine davon in den
+  // Ausschnitt hineingeklemmt - zwei Texte an derselben Stelle,
+  // "10.0910.09. 21:51", und keiner mehr lesbar.
+  let letztesX = -1e9;
+  // Beschriftung nach der tatsaechlichen Spanne, nicht nach dem Namen der
+  // Zeitebene. Vorher entschied allein S.tf==="1d" ueber Datum oder
+  // Uhrzeit - bei 573 Viertelstundenkerzen ueber sechs Tage stand damit
+  // nur die Tageszeit da und die Achse las sich rueckwaerts:
+  // 15:45, 13:30, 17:45, 15:30. Richtige Zeitpunkte, aber an
+  // verschiedenen Tagen, und ohne Datum nicht zu unterscheiden.
+  const spanD = bars.length > 1
+    ? (bars[bars.length-1].t - bars[0].t) / 86400 : 0;
+  const dOpt = {day:"2-digit", month:"2-digit"};
+  // Und das Datum IMMER dann, wenn die Balken nicht von heute sind.
+  //
+  // Die Spanne allein reichte nicht. Eine US-Sitzung dauert sechseinhalb
+  // Stunden, liegt also weit unter jeder Tagesschwelle - die Achse zeigte
+  // reine Uhrzeiten. Solange die Boerse zu ist, ist das aber die Sitzung
+  // von GESTERN, und "21:56" liest sich dann wie heute Abend. Um 13:13
+  // mittags stand damit eine Uhrzeit auf der Achse, die noch gar nicht
+  // stattgefunden hat.
+  //
+  // Gerechnet wird im Kalendertag des Telefons, nicht in UTC: es geht
+  // darum, was der Leser "heute" nennt. Der Wert steht schon oben, weil
+  // auch das Sitzungsschild ihn braucht.
+  const nichtHeute = nichtHeuteOben;
+  // Ueber ein Jahr hinaus braucht es das Jahr. Auf der Tagesebene lief
+  // die Achse ueber zwei Jahre und zeigte "10.09. · 12.03. · 10.09." -
+  // zwei verschiedene Septembertage, nicht zu unterscheiden.
+  const yOpt = {month:"2-digit", year:"2-digit"};
+  // Die Schwelle zum reinen Datum liegt bei zehn Tagen, nicht bei
+  // fuenf: bei knapp ueber fuenf Tagen fielen zwei der fuenf Marken auf
+  // denselben Kalendertag und die Achse las sich "08.09. · 08.09.".
+  // Solange die Uhrzeit die Marken noch trennt, gehoert sie dazu.
+  // Vielfache von st im ABSOLUTEN Index. Vorher zaehlte die Schleife vom
+  // Anfang des Ausschnitts, und der wandert beim Schieben - die
+  // Beschriftung sprang mit jedem hereinlaufenden Balken auf andere
+  // Zeitpunkte um. So bleibt eine Marke an ihrem Balken kleben.
+  for(let i=Math.ceil(iL/st)*st; i<=iR; i+=st){
+    const d=new Date(alle[i].t*1000);
+    const lab = spanD > 300
+      ? d.toLocaleDateString("de-DE", yOpt)
+      : (S.tf==="1d" || spanD > 10)
+      ? d.toLocaleDateString("de-DE", dOpt)
+      : (spanD > 1.2 || nichtHeute)
+        ? d.toLocaleDateString("de-DE", dOpt)+" "
+          + d.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})
+        : d.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"});
+    const lw = textW(ctx, lab);
+    let x=X(i); ctx.textAlign="center";
+    // Nicht mehr in den Ausschnitt hineinklemmen. Eine Marke, die aus
+    // dem Bild laeuft, gehoert weggelassen - hineingeschoben steht sie
+    // ueber dem falschen Balken und behauptet eine Zeit, die dort nicht
+    // gilt.
+    if(x - lw/2 < 1 || x + lw/2 > pw - 1) continue;
+    if(x - lw/2 < letztesX + 8) continue;
+    letztesX = x + lw/2;
+    ctx.fillText(lab, x, H-PAD.b+13);
+  }
+  ctx.textAlign="left";
+}
+
+// ======================= Gesten =======================
+/* ── Massstab und Lage ─────────────────────────────────────────────────
+
+   Drei Dinge lassen sich verstellen, und jedes hat seine Geste:
+
+     waagerecht wischen      Zeit schieben
+     senkrecht wischen       Preis schieben
+     zwei Finger             zoomen, waagerecht Zeit, senkrecht Preis
+     an der Achse ziehen     Preisskala dehnen und stauchen
+
+   Der senkrechte Anteil war vorher gar nicht vorhanden: die Skala rechnete
+   sich in jedem Bild neu aus den Kerzen aus, also gab es nichts zu
+   verstellen. Wer daran zog, zog ins Leere. Jetzt merkt sich S.vs ein
+   Fenster, sobald jemand es anfasst - und AUTO gibt es wieder her. */
+
+/** Liegt der Finger auf der Preisachse? Die Trefferflaeche ist etwas
+    breiter als die Achse selbst; 56 Bildpunkte sind auf einem Telefon
+    knapp vier Millimeter und ein Daumen ist breiter. */
+function anAchse(clientX){
+  const r = cv.getBoundingClientRect();
+  return (clientX - r.left) > (W - PAD.r - 12);
+}
+/** Der Balkenindex unter einem Bildschirmpunkt, als Bruch. */
+function iBeiX(clientX){
+  const r = cv.getBoundingClientRect();
+  const sp = Math.max(1e-6, span());
+  return (S.vw?.i0 || 0) + ((clientX - r.left) / ((W - PAD.r) / sp)) - 0.5;
+}
+/** Das gerade geltende Preisfenster - von Hand gesetztes oder das, was
+    die Automatik im letzten Bild ergeben hat. */
+function skalaJetzt(){
+  const q = S.vs || S.autoScale;
+  return q && q.hi > q.lo ? {lo:q.lo, hi:q.hi} : null;
+}
+/** Preisfenster setzen, mit Grenzen.
+
+    Ohne Grenzen laesst sich der Chart in einer einzigen Wischbewegung so
+    weit verstellen, dass gar nichts mehr im Bild ist - und dann sieht er
+    kaputt aus, nicht verstellt. Bezug ist die Spanne, die die Automatik
+    ergeben haette: hoechstens das Achtfache davon, mindestens ein
+    Achtel, und die Mitte hoechstens fuenf Spannen vom Kurs weg.
+
+    War vorher das 25-fache. Ein Zusammenziehen der Finger reicht, um
+    diese Grenze zu erreichen, und bei ~140 Punkten normaler Spanne
+    ergab das 25-fache 3.500 Punkte - jede Kerze darin unter einem
+    Bildpunkt gequetscht und faktisch weg, nur die Wandketten blieben
+    stehen. Ein Bild ohne eine einzige sichtbare Kerze sieht nicht nach
+    "weit herausgezoomt" aus, es sieht nach kaputt aus. Das Achtfache
+    zeigt entfernte Waende immer noch, laesst der Kursbewegung selbst
+    aber ihren Platz. */
+function setzeSkala(lo, hi){
+  if(!(hi > lo) || !isFinite(lo) || !isFinite(hi)) return;
+  const a = S.autoScale;
+  if(a && a.hi > a.lo){
+    const aR = a.hi - a.lo, aM = (a.hi + a.lo) / 2;
+    let r = Math.max(aR/8, Math.min(aR*8, hi - lo));
+    let m = (hi + lo) / 2;
+    m = Math.max(aM - aR*5, Math.min(aM + aR*5, m));
+    lo = m - r/2; hi = m + r/2;
+  }
+  S.vs = {lo, hi};
+}
+
+let drag=null,pinch=null,press=null,tuckTimer=null;
+const wrap=$("cvwrap");
+
+/** Marktleiste beim Arbeiten im Chart wegklappen - dieselbe Mechanik,
+    mit der Feed-Apps beim Scrollen Platz schaffen.
+
+    Sie kommt NICHT von selbst zurueck. Vorher tat sie das nach 1,3
+    Sekunden, und das war das Schlechteste aus beiden Welten: waehrend
+    der Geste sah man sie nicht, und kaum hatte man den Finger gehoben,
+    schob sie sich wieder ueber den Chart - der Platz war nie wirklich
+    da. Jetzt bleibt sie weg, bis man sie holt.
+
+    Damit sie holbar bleibt, tritt ein schmaler Griff an ihre Stelle.
+    Eine Flaeche, die verschwindet, ohne eine Spur zu hinterlassen, ist
+    verloren; ein Griff kostet vier Bildpunkte und sagt, dass da noch
+    etwas ist. */
+function tuck(on){
+  const st=$("strip");
+  if(!st || st.classList.contains("tucked")===!!on) return;
+  clearTimeout(tuckTimer);
+  st.classList.toggle("tucked", !!on);
+  $("striphandle").hidden = !on;
+  // Erst jetzt aendert sich die nutzbare Hoehe wirklich.
+  requestAnimationFrame(()=>{ measureChrome(); draw(); });
+}
+wrap.addEventListener("touchstart",e=>{
+  tuck(true);
+  if(e.touches.length===1){
+    const t=e.touches[0], cx=t.clientX, cy=t.clientY;
+    const sc=skalaJetzt(), achse=anAchse(cx);
+    // Die Spanne wird HIER festgehalten.
+    //
+    // Vorher las das Schieben sie waehrend der Bewegung neu - und zwar
+    // nachdem i0 schon verschoben war. Damit blieb i1 stehen und nur die
+    // linke Kante lief mit: aus dem Schieben wurde ein Dehnen. Das war
+    // der eigentliche Grund, warum sich der Chart nicht bewegen liess.
+    drag={x:cx, y:cy, i0:S.vw?.i0||0, sp:span(), achse:achse,
+          lo:sc?sc.lo:0, hi:sc?sc.hi:0, t:Date.now(), moved:false};
+    // Eingefroren wird NICHT schon hier, sondern bei der ersten
+    // wirklichen Bewegung - siehe touchmove.
+    //
+    // Vorher fror ein blosses Antippen die Skala sofort ein - auch der
+    // Beginn jedes langen Druecks fuers Fadenkreuz, auch ein Verwackler
+    // beim Scrollen einer anderen Leiste. Sichtbar aenderte sich dabei
+    // nichts, denn eingefroren wurde genau der Stand, der schon zu
+    // sehen war - aber von da an folgte die Skala dem Kurs nicht mehr,
+    // ohne dass der Nutzer etwas dafuer getan hatte. Erst eine Geste,
+    // die tatsaechlich etwas verschiebt, verdient das Einfrieren.
+    if(!achse) press=setTimeout(()=>{ // langes Drücken blendet das Fadenkreuz ein
+      S.cross=iBeiX(cx); buzz(8); paint();
+    },380);
+  } else if(e.touches.length===2){
+    clearTimeout(press);
+    const a=e.touches[0], b=e.touches[1], sc=skalaJetzt();
+    pinch={dx:Math.abs(a.clientX-b.clientX), dy:Math.abs(a.clientY-b.clientY),
+           sp:span(), i0:S.vw?.i0||0,
+           mx:(a.clientX+b.clientX)/2, my:(a.clientY+b.clientY)/2,
+           lo:sc?sc.lo:0, hi:sc?sc.hi:0};
+    // Eingefroren wird erst, wenn die Geste tatsaechlich zoomt - siehe
+    // touchmove und die Begruendung bei touchstart oben.
+    drag=null;
+  }
+},{passive:true});
+wrap.addEventListener("touchmove",e=>{
+  if(!S.vw) return;
+  const n=(S.data?.bars||[]).length, r=cv.getBoundingClientRect();
+  if(pinch&&e.touches.length===2){
+    clearTimeout(press);
+    const a=e.touches[0], b=e.touches[1];
+    const dx=Math.abs(a.clientX-b.clientX), dy=Math.abs(a.clientY-b.clientY);
+    // Jede Achse nur dann, wenn die Finger in ihrer Richtung ueberhaupt
+    // auseinanderstehen. Bei einem waagerechten Griff ist der senkrechte
+    // Abstand ein paar Bildpunkte Zittern - daraus einen Zoomfaktor zu
+    // rechnen hiesse, die Preisskala bei jeder Zeitgeste mitzureissen.
+    if(!S.vs && pinch.hi>pinch.lo && (Math.abs(dx-pinch.dx)>10 || Math.abs(dy-pinch.dy)>10))
+      S.vs = {lo:pinch.lo, hi:pinch.hi};
+    if(pinch.dx>24 && dx>24){
+      const sp2=Math.max(10,Math.min(n,pinch.sp*(pinch.dx/dx)));
+      // Um den Mittelpunkt der Geste, nicht um die Bildmitte: der Punkt
+      // zwischen den Fingern soll unter ihnen stehen bleiben.
+      const f=Math.max(0,Math.min(1,(pinch.mx-r.left)/Math.max(1,W-PAD.r)));
+      const anker=pinch.i0+f*pinch.sp;
+      S.vw={i0:anker-f*sp2, i1:anker-f*sp2+sp2}; clampView();
+    }
+    if(pinch.dy>24 && dy>24 && pinch.hi>pinch.lo && S.geo){
+      const g=S.geo;
+      const f=Math.max(0,Math.min(1,(pinch.my-r.top-g.topPad)/Math.max(1,g.ph)));
+      const ankerP=pinch.hi-f*(pinch.hi-pinch.lo);
+      const R=(pinch.hi-pinch.lo)*(pinch.dy/dy);
+      setzeSkala(ankerP-(1-f)*R, ankerP+f*R);
+    }
+    paint();
+  } else if(drag&&e.touches.length===1){
+    const t=e.touches[0];
+    const dx=t.clientX-drag.x, dy=t.clientY-drag.y;
+    // Drei Bildpunkte statt sechs. Sechs waren auf einem 3x-Bildschirm
+    // fast zwei Millimeter tote Zone am Anfang jeder Geste, und genau
+    // dieser Anfang entscheidet, ob sich etwas fluessig anfuehlt.
+    if(!drag.moved && Math.abs(dx)+Math.abs(dy)>3){
+      clearTimeout(press); drag.moved=true;
+      // Jetzt erst einfrieren - siehe touchstart. Genau der Stand, der
+      // in diesem Moment zu sehen ist, damit es beim Loslegen keinen
+      // Sprung gibt.
+      if(!S.vs && drag.hi>drag.lo) S.vs = {lo:drag.lo, hi:drag.hi};
+    }
+    if(S.cross!=null){ S.cross=iBeiX(t.clientX); paint(); return; }
+    if(!drag.moved) return;
+    if(drag.achse){
+      // An der Achse ziehen dehnt und staucht das Preisfenster um seine
+      // Mitte. Nach unten heisst mehr Preis im Bild, nach oben weniger -
+      // dieselbe Richtung wie in jeder Chartsoftware.
+      if(drag.hi>drag.lo){
+        const c=(drag.lo+drag.hi)/2, hR=(drag.hi-drag.lo)/2;
+        const k=Math.exp(dy/230);
+        setzeSkala(c-hR*k, c+hR*k);
+      }
+    } else {
+      // Zeit waagerecht. drag.sp ist die Spanne vom Anfang der Geste -
+      // siehe oben, warum sie nicht unterwegs gelesen werden darf.
+      const per=(W-PAD.r)/Math.max(1,drag.sp);
+      S.vw={i0:drag.i0-dx/per, i1:drag.i0-dx/per+drag.sp}; clampView();
+      // Preis senkrecht. Erst ab vier Bildpunkten, damit ein waagerechter
+      // Wisch nicht bei jedem Zittern die Skala von der Automatik loest.
+      if(Math.abs(dy)>4 && drag.hi>drag.lo && S.geo){
+        const d=(drag.hi-drag.lo)*(dy/Math.max(1,S.geo.ph));
+        setzeSkala(drag.lo+d, drag.hi+d);
+      }
+    }
+    paint();
+  }
+},{passive:true});
+/** Der letzte kurze Tipp - fuer die Doppeltipp-Erkennung unten. */
+let letzterTipp = {t:0, x:0, y:0};
+wrap.addEventListener("touchend",e=>{
+  clearTimeout(press);
+  if(S.cross!=null){ S.cross=null; paint(); }
+  const t=e.changedTouches && e.changedTouches[0];
+  let zurueckgesetzt = false;
+  // Kurzes Tippen auf AUTO gibt die Skala an die Automatik zurueck.
+  const b=S.autoBtn;
+  if(b && t && drag && !drag.moved){
+    const r=cv.getBoundingClientRect();
+    const x=t.clientX-r.left, yy=t.clientY-r.top;
+    if(x>=b.x-4 && x<=b.x+b.w+4 && yy>=b.y-6 && yy<=b.y+b.h+6){
+      // ALLES zurueck: Skala, Ausschnitt und die weite Ansicht.
+      //
+      // Die weite Ansicht fehlte hier, und das war der Grund, warum der
+      // Weg zurueck nicht funktionierte: wer den Zoom-Knopf gedrueckt
+      // hatte, kam mit AUTO nicht wieder heraus, weil AUTO nur S.vs
+      // loeschte - und S.fitAll rechnet an S.vs vorbei.
+      S.vs=null; S.fitAll=false; fitView(); renderTf(); buzz(8); paint();
+      zurueckgesetzt = true;
+    }
+  }
+  // Doppeltipp irgendwo auf dem Chart tut dasselbe - die Geste, die man
+  // aus praktisch jeder Chart-App kennt, und griffbereiter als der
+  // kleine AUTO-Schalter, wenn die Skala gerade weit draussen steht und
+  // der Schalter selbst kaum noch zu treffen ist.
+  if(!zurueckgesetzt && t && drag && !drag.moved){
+    const jetzt = Date.now();
+    const dx = t.clientX-letzterTipp.x, dy = t.clientY-letzterTipp.y;
+    if(jetzt-letzterTipp.t < 320 && Math.abs(dx)<30 && Math.abs(dy)<30){
+      S.vs=null; S.fitAll=false; fitView(); renderTf(); buzz(10); paint();
+      letzterTipp.t = 0;                     // verbraucht, kein Zaehler fuer einen dritten Tipp
+    } else {
+      letzterTipp = {t:jetzt, x:t.clientX, y:t.clientY};
+    }
+  }
+  drag=null; pinch=null;
+},{passive:true});
+wrap.addEventListener("wheel",e=>{
+  if(!S.vw) return; e.preventDefault();
+  // Ueber der Achse zoomt das Rad den Preis, sonst die Zeit. Am
+  // Schreibtisch ist das die einzige Entsprechung zur Zwei-Finger-Geste.
+  if(anAchse(e.clientX)){
+    const sc=skalaJetzt(); if(!sc) return;
+    const c=(sc.lo+sc.hi)/2, hR=(sc.hi-sc.lo)/2, k=e.deltaY>0?1.12:0.89;
+    setzeSkala(c-hR*k, c+hR*k); paint(); return;
+  }
+  const sc0=skalaJetzt();
+  if(!S.vs && sc0) S.vs = {lo:sc0.lo, hi:sc0.hi};   // Skala stillstellen
+  const n=(S.data.bars||[]).length;
+  const sp=Math.max(10,Math.min(n,span()*(e.deltaY>0?1.15:.87))), mid=S.vw.i0+span()/2;
+  S.vw={i0:mid-sp/2,i1:mid+sp/2}; clampView(); paint();
+},{passive:false});
+
+// ======================= Rendern =======================
+function render(){
+  const d=S.data; if(!d) return;
+  $("sym").textContent = d.space?.name || SYM[S.market] || S.market;
+  // Sichtbarer Unterschied zwischen live und verzoegert. Ein Chart, der
+  // aussieht wie ein Kurs und eine Viertelstunde alt ist, ist
+  // gefaehrlicher als einer, der sich als alt zu erkennen gibt.
+  const lage = kursLage(d);
+  const lv = $("livedot");
+  if(lv){
+    lv.className = "livedot " + (lage.k==="live" ? "on" : lage.k==="zu" ? "shut" : "off");
+    lv.title = lage.k==="live"
+      ? `Live aus ${esc(d.live.symbol||"der Brücke")}`
+        + (d.live.src==="oanda" ? " (OANDA, nicht dein Broker)" : " (deine Brücke)")
+        + ` · Tick vor ${Math.round(d.live.tick_age||0)} s`
+      : lage.t + (d.live?.reason ? " — "+esc(d.live.reason) : "");
+  }
+  tickTo($("spot"), d.spot);
+  const ov = S.overview.find(o=>o.key===S.market);
+  const ch = $("chg");
+  if(ov && ov.change!=null){
+    ch.textContent = `${sgn(ov.change)}  ${ov.change_pct>=0?"+":""}${ov.change_pct.toFixed(2)}%`;
+    ch.className = "chg tnum "+(ov.change>=0?"up":"dn");
+  } else { ch.textContent=d.market_name||""; ch.className="chg tnum"; }
+  const rg=$("regime"); rg.className="rg "+(d.regime||"");
+  rg.querySelector("span").textContent =
+    d.regime==="long"?"LONG γ" : d.regime==="short"?"SHORT γ" : "—";
+  const stale = d.chain_stale || d.bar_source?.stale;
+  $("meta").innerHTML =
+    `${d.space?.name ? d.space.name+" "+sgn(Math.round(d.space.offset))
+        +(d.space.stale?" ⚠":"")+" · " : ""}`+
+    `${lage.t} · ${d.bar_source?.source==="cboe"?"Cboe"
+        : d.bar_source?.source==="bridge"?"Brücke":"Yahoo"}`+
+    `${stale?" · STALE":""} · ATR ${fmt(d.atr)} · `+
+    `${d.bars.length} Kerzen${S.layers.profil && d.vp?.basis
+      ? " · "+({cme:"CME-Volumen", etf:"Stückvolumen", options:"Optionsfluss", time:"Zeit je Preis"}[d.vp.basis] || d.vp.basis)
+        + (d.vp.source ? " ("+esc(d.vp.source)+")" : "")
+        + (S.layers.tpo && d.tpo?.brackets ? " + TPO "+d.tpo.brackets+"×"+d.tpo.bracket_min+"min" : "")
+      : ""}${S.trails?.tracks?.length && S.layers.orbs
+      ? " · "+S.trails.tracks.length+" Spuren" : ""} · ${hhmm(d.ts)}`;
+  renderTf(); renderStrip(); renderLevel(); renderGamma(); paint();
+}
+
+/** In welchem Zustand ist der Kurs, und warum.
+
+    Es gibt drei davon, und sie zu verwechseln ist der teuerste Fehler,
+    den diese App machen kann:
+
+      LIVE       die Bruecke liefert Ticks vom Broker
+      VERZOEGERT die Boerse laeuft, Cboe liefert mit 15 Minuten Abstand
+      ZU         die Boerse ist geschlossen, der Kurs KANN nicht laufen
+
+    Der dritte Fall sah bisher aus wie der zweite, nur kaputt: der Chart
+    stand still und nichts sagte, warum. Um halb eins deutscher Zeit ist
+    aber schlicht noch nicht geoeffnet - die US-Sitzung beginnt um 15:30.
+
+    Der Feiertag ist der Grund, warum hier nicht allein der Kalender
+    zaehlt: den kennt der Server nicht. Bleibt ein Balken bei angeblich
+    offener Boerse aelter als eine halbe Stunde, sagt die Zeile das und
+    behauptet nichts. */
+function kursLage(d){
+  const c = d.clock || {};
+  const alt = d.bar_age;
+  if(d.live?.live){
+    // Welcher Weg traegt gerade. Der eigene Broker und ein fremder CFD
+    // sind beide live, aber nicht dasselbe: der eine ist der Kurs, zu
+    // dem gehandelt wird, der andere eine sehr nahe Naeherung. Wer das
+    // nicht unterscheiden kann, haelt eine Naeherung fuer seinen Kurs.
+    // Drei Wege, und der Unterschied gehoert benannt: Bruecke und
+    // cTrader liefern den Kurs des EIGENEN Brokers, OANDA den eines
+    // fremden. Wer das nicht unterscheiden kann, haelt eine Naeherung
+    // fuer seinen Kurs.
+    const woher = {oanda:"LIVE · OANDA", ctrader:"LIVE · cTrader"};
+    return {k:"live", t: woher[d.live.src] || "LIVE"};
+  }
+  if(c.open === false){
+    const bis = c.next_ts ? new Date(c.next_ts*1000) : null;
+    const std = bis ? (c.next_ts*1000 - Date.now())/3600000 : null;
+    const wann = !bis ? "" : std != null && std < 14
+      ? " · öffnet "+bis.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})
+      : " · öffnet "+bis.toLocaleDateString("de-DE",{weekday:"short"})
+        +" "+bis.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"});
+    return {k:"zu", t:"BÖRSE ZU"+wann};
+  }
+  // Fehlende frische Balken sind kurz nach der Eroeffnung KEIN Befund.
+  //
+  // Cboe liefert mit einer Viertelstunde Abstand, also gibt es um Punkt
+  // 15:30 zwangslaeufig noch keinen Balken von heute - der juengste ist
+  // der von gestern Abend. Gemeldet wurde daraufhin "keine frischen
+  // Kurse seit 1065 min", und das las sich wie ein Ausfall, waehrend
+  // alles seinen Gang ging.
+  //
+  // Gemessen wird deshalb gegen die Zeit SEIT der Eroeffnung, nicht
+  // gegen das Alter des Balkens. Erst wenn die Sitzung laenger laeuft
+  // als Verzoegerung plus zehn Minuten Luft und trotzdem nichts kommt,
+  // ist es einer - dann meist ein Feiertag, den der Kalender nicht kennt.
+  const vz = (d.delayed_minutes || c.delay_min || 15);
+  const seit = c.since_open;
+  if(c.open === true){
+    if(seit != null && seit < (vz + 10) * 60 && alt != null && alt > 1800)
+      return {k:"delay", t:"Börse offen · erste Kurse "+vz+" min verzögert"};
+    if(alt != null && alt > (vz + 25) * 60)
+      return {k:"zu", t:"keine frischen Kurse seit "+Math.round(alt/60)+" min"};
+  }
+  return {k:"delay", t:vz+" min verzögert"};
+}
+
+function renderTf(){
+  $("tfbar").innerHTML =
+    `<div class="tfscroll">`
+    + TFS.map(t=>`<button class="tfc ${t===S.tf?"on":""}" data-t="${t}">${t}</button>`).join("")
+    + `</div><div class="tficons">`
+    + `<button class="tfc icon" id="btnFull" aria-label="Vollbild">${S.immersive?"◱":"◰"}</button>`
+    + `<button class="tfc icon" id="btnLayers" aria-label="Struktur">☰</button>`
+    + `<button class="tfc icon ${S.fitAll?"on":""}" id="btnFit"`
+    + ` aria-label="${S.fitAll?"weite Ansicht aus":"weite Ansicht"}"`
+    + ` aria-pressed="${S.fitAll?"true":"false"}">${S.fitAll?"⤡":"⤢"}</button>`
+    + `</div>`;
+  $("tfbar").querySelectorAll("[data-t]").forEach(b=>b.onclick=()=>{
+    if(b.dataset.t === S.tf) return;
+    S.tf=b.dataset.t; S.view0=false; S.vs=null; buzz(8);
+    renderTf();                      // der Knopf faerbt sich sofort
+    // Kerzen zuerst - sie sind das, worauf man wartet. Der volle Stand
+    // kommt hinterher und ersetzt sie klaglos, wenn er da ist.
+    ladeKerzen().then(()=>load());
+  });
+  // Der Zoomschalter rechnet die Skala neu aus - eine von Hand gesetzte
+  // wuerde ihn stumm verschlucken.
+  // Die gewaehlte Zeitebene ins Sichtfeld holen. Die Leiste scrollt
+  // waagerecht, und "1d" steht ganz rechts - nach dem Antippen war der
+  // aktive Knopf aus dem Bild geschoben und die Leiste sah aus, als sei
+  // gar nichts gewaehlt.
+  const anKnopf = $("tfbar").querySelector(".tfc.on");
+  if(anKnopf && anKnopf.scrollIntoView)
+    anKnopf.scrollIntoView({block:"nearest", inline:"nearest"});
+  $("btnFit").onclick=()=>{ S.fitAll=!S.fitAll; S.vs=null; buzz(8); renderTf(); paint(); };
+  $("btnFull").onclick=()=>{
+    S.immersive=!S.immersive;
+    document.body.classList.toggle("immersive", S.immersive);
+    buzz(10); renderTf(); setTimeout(()=>{ resize(); }, 260);
+  };
+  $("btnLayers").onclick=layerSheet;
+}
+
+function renderStrip(){
+  const el=$("striprow");
+  let src = S.overview.length ? S.overview
+    : Object.keys(SYM).map(k=>({key:k,name:k,spot:null,change_pct:null}));
+  // Eingeklappt passen drei Werte in die Zeile, der Rest wird gescrollt.
+  // Der aktive Markt gehoert deshalb nach vorn - sonst kann ausgerechnet
+  // der, auf den der Chart laeuft, ausserhalb des Sichtbaren liegen.
+  if(!$("strip").classList.contains("full"))
+    src = [...src].sort((a,b)=> (b.key===S.market) - (a.key===S.market));
+  el.innerHTML = src.map(m=>`
+    <button class="mchip ${m.key===S.market?"on":""} ${
+      m.change_pct==null?"":(m.change_pct>=0?"up":"dn")}" data-m="${m.key}">
+      <div class="k">${m.key===S.market && S.data?.space?.name
+        ? esc(S.data.space.name) : (SYM[m.key]||m.key)}</div>
+      <div class="p tnum">${(m.key===S.market?px:fmt)(m.spot, m.spot&&m.spot<1000?1:0)}</div>
+      <div class="c tnum ${m.change_pct==null?"":(m.change_pct>=0?"up":"dn")}">${
+        m.change_pct==null?"—":(m.change_pct>=0?"+":"")+m.change_pct.toFixed(2)+"%"}</div>
+    </button>`).join("");
+  el.querySelectorAll("[data-m]").forEach(b=>b.onclick=()=>switchMarket(b.dataset.m));
+  // Erst jetzt steht die Leiste - vorher gemessen waere sie leer und der
+  // Chart begaenne unter der Kopfzeile statt darunter.
+  measureChrome(); draw();
+}
+
+/** Auf- und zuklappen. Der Zustand ueberlebt das Neuladen, weil er eine
+    Gewohnheit ist und keine Entscheidung, die man taeglich neu trifft. */
+function setStrip(open){
+  const el = $("strip");
+  el.classList.toggle("full", open);
+  el.classList.toggle("slim", !open);
+  try{ localStorage.setItem("stripOpen", open ? "1" : "0"); }catch(e){}
+  renderStrip();     // die Reihenfolge haengt am Zustand
+  // Die Leiste aendert ihre Hoehe, also muss der Chart neu vermessen
+  // werden - sonst zeichnet er unter oder ueber seinen Rahmen hinaus.
+  requestAnimationFrame(()=>{ measureChrome(); draw(); });
+}
+$("striphandle").onclick = () => { tuck(false); buzz(6); };
+
+$("stripx").onclick = () => {
+  setStrip(!$("strip").classList.contains("full"));
+  buzz(6);
+};
+try{ setStrip(localStorage.getItem("stripOpen") === "1"); }catch(e){}
+
+function switchMarket(k){
+  if(k===S.market) return;
+  S.market=k; S.plan=null; S.data=null; S.view0=false; S.lastMsgCount=0; S.trails=null;
+  S.vs=null; S.cross=null; S.laedt=true; S.ladeFehler=null;
+  buzz(10); closeSheet();
+  ["p-level","p-gamma","p-agent","p-plan"].forEach(id=>$(id).innerHTML='<div class="skel"><i></i><i></i><i></i></div>');
+  ladeKerzen().then(()=>load());   // Kerzen zuerst, siehe unten beim Start
+  loadMessages(); loadPlan(); loadTrails();
+}
+
+function renderLevel(){
+  const d=S.data, el=$("p-level");
+  const fx=d.fixed||{}, lv=mergedFixed();
+  const anchor=fx.anchor||{};
+/** Wie nah kam der Kurs heute? Erst das macht "ungetestet" zur Aussage.
+
+    Ohne diese Zeile sehen zwei Level gleich aus, die nichts miteinander
+    zu tun haben: eines, das der Kurs um ein Drittel einer Kerze verfehlt
+    hat, und eines, das zwanzig Kerzen entfernt steht. Gemessen an einem
+    echten Handelstag: die Call-Wand wurde um 25 Punkte verfehlt, die
+    Put-Wand daneben stand 1.500 Punkte weg - beide meldeten
+    "ungetestet".
+
+    Der Abstand in ATR ist der eigentliche Wert. 25 Punkte sind beim
+    Nasdaq ein Drittel einer Kerze, beim Dow das Fuenfundzwanzigfache. */
+function nearTag(l){
+  if(l.near == null) return "";
+  if(l.near <= 0.5) return `<div class="near hit">heute berührt</div>`;
+  const a = l.near_atr;
+  const stufe = a == null ? "" : a < 0.5 ? "hot" : a < 2 ? "warm" : "cold";
+  return `<div class="near ${stufe}">nächste Annäherung heute:
+    <b>${fmt(l.near)} Punkte</b>${a!=null?` · ${a.toFixed(2)} ATR`:""}${
+    a!=null && a<0.5 ? " — knapp verfehlt" : a!=null && a>=4 ? " — weit weg" : ""}</div>`;
+}
+
+  const stateTag = s => s==="held"?'<span class="tag held">gehalten</span>'
+    : s==="broken"?'<span class="tag broken">gebrochen</span>'
+    : s==="tested"?'<span class="tag tested">im Test</span>'
+    : '<span class="tag">ungetestet</span>';
+  const col = p => p>d.spot*1.0015?"var(--resist)":p<d.spot*0.9985?"var(--support)":"var(--pivot)";
+  const kcol = k => `var(${levelColor(k)})`;
+
+  let h = `<div class="sec">Fixe Level · eingefroren ${hhmm(anchor.ts)} am ${fx.anchor_hour}:00-Anker</div>`;
+  h += lv.length ? lv.map(l=>`
+    <div class="card role" style="--c:${kcol(l.kind)}">
+      <div class="ch">
+        <b>${px(l.price)}</b>${stateTag(l.state)}
+        <span class="far">${sgn(l.price-d.spot)}</span>
+      </div>
+      <div class="cs">${esc(l.labels.join(" · "))}${
+        Math.abs(l.drift||0) >= 1 ? ` · läuft aktuell auf ${px(l.live)} <span style="color:var(--warn)">(${sgn(l.drift)})</span>` : " · unverändert"}</div>
+      <div class="cm">
+        <span>${l.exams_total===0?"nie getestet":l.exams_total+". Prüfung"}</span>
+        ${l.exams_held?`<span style="color:var(--support)">${l.exams_held}× gehalten</span>`:""}
+        ${l.exams_broken?`<span style="color:var(--warn)">${l.exams_broken}× gebrochen</span>`:""}
+        <span>seit ${esc(l.born)}</span>
+      </div>
+      ${nearTag(l)}
+    </div>`).join("")
+    : '<div class="empty">Das Buch ist noch leer. Es wird am nächsten Tagesanker gefüllt.</div>';
+
+  // Leading Walls aus allen Ketten des Marktes
+  const lw = d.leading_walls || [];
+  const conf = d.wall_confluence || [];
+  if(conf.length){
+    h += `<div class="sec">Konfluenz über Ketten — dieselbe Wand, zwei Quellen</div>`;
+    h += conf.slice(0,4).map(z=>`
+      <div class="card role" style="--c:${col(z.mid)}">
+        <div class="ch"><b>${z.top-z.bot < 2 ? px(z.mid) : px(z.bot)+" – "+px(z.top)}</b>
+          <span class="tag">${esc(z.chains.join(" + "))}</span>
+          <span class="far">${sgn(z.mid-d.spot)}</span></div>
+        <div class="cs">${z.members} Wände auf einem Fleck · ${esc(z.sides.map(x=>x==="call"?"Call":"Put").join(" und "))}</div>
+        <div class="cm"><span>${fmtM(z.oi)} Open Interest</span></div>
+      </div>`).join("");
+  }
+  if(lw.length){
+    const mx = Math.max(...lw.map(w=>w.oi))||1;
+    const byChain = {};
+    lw.forEach(w=>{ (byChain[w.chain] = byChain[w.chain]||[]).push(w); });
+    h += `<div class="sec">Leading Walls je Kette</div>`;
+    Object.entries(byChain).forEach(([chain, ws])=>{
+      const grid = ws[0].grid;
+      h += `<div class="card"><div class="ch">
+        <b style="font-size:13px">${esc(chain)}</b>
+        <span class="tag">${esc(ws[0].chain_kind)}</span>
+        <span class="far">Raster ${fmt(grid)} Pkt</span></div>`;
+      h += ws.map(w=>`<div class="brow">
+        <span class="k" style="color:var(--${w.side==="call"?"resist":"support"})">${px(w.price)}</span>
+        <span class="bar" style="--c:var(--${w.side==="call"?"resist":"support"})"><i style="width:${(w.oi/mx*100).toFixed(0)}%"></i></span>
+        <span class="v">${fmtM(w.oi)}</span></div>`).join("");
+      h += `</div>`;
+    });
+    const r = d.chain_ratios||{};
+    const etf = Object.entries(r).find(([k,v])=>v!==1);
+    if(etf) h += `<div class="foot">ETF-Strikes sind über das Verhältnis
+      ${etf[0]} × ${etf[1].toFixed(3)} in den Index-Preisraum übersetzt — beide Kurse
+      zum selben Zeitpunkt aus derselben Quelle, keine Futures-Basis nötig.
+      Ein ${esc(etf[0])}-Strike-Schritt entspricht rund ${fmt((lw.find(w=>w.chain===etf[0])||{}).grid||0)}
+      Indexpunkten; das ist der Genauigkeitsboden jeder daraus abgeleiteten Marke.</div>`;
+  }
+
+  h += `<div class="sec">Konfluenz-Zonen</div>`;
+  const zs=d.zones||[];
+  h += zs.length ? zs.map(z=>`
+    <div class="card role" style="--c:${col(z.mid)}">
+      <div class="ch"><b>${z.width<2?px(z.mid):px(z.bot)+" – "+px(z.top)}</b>
+        <span class="tag">#${z.rank}</span>
+        <span class="far">${sgn(z.mid-d.spot)}</span></div>
+      <div class="cs">${esc(z.labels.join(" · "))}</div>
+      <div class="cm"><span>${fmt(z.width)} Punkte</span><span>${z.width_atr.toFixed(2)} ATR</span>
+        <span>Score ${z.score.toFixed(1)}</span></div>
+    </div>`).join("")
+    : '<div class="empty">Keine Zone trägt genug Konfluenz — es braucht mindestens zwei verschiedene Quellenarten im selben Band.</div>';
+
+  h += `<div class="foot">Die fixen Level werden einmal am ${fx.anchor_hour}:00-Anker eingefroren und danach nur
+    fortgeschrieben. Ohne das wandert jede Wand mit jedem Snapshot — und ein Level, das sich ständig
+    verschiebt, lässt sich weder handeln noch messen. Der Prüfungszähler läuft über Tage weiter,
+    solange derselbe Strike wiederkehrt.</div>`;
+  el.innerHTML=h;
+}
+
+function renderGamma(){
+  const d=S.data, el=$("p-gamma");
+  if(d.net_gex==null){ el.innerHTML='<div class="empty">Keine Optionskette verfügbar.</div>'; return; }
+  const g=d.greeks||{};
+  let h=`<div class="tiles">
+    <div class="tile"><div class="l">Netto-GEX je Punkt</div>
+      <div class="v" style="color:${d.net_gex<0?"var(--warn)":"var(--support)"}">${fmtM(d.net_gex)}</div>
+      <div class="n">${d.regime==="short"?"Dealer verstärken Bewegungen":"Dealer dämpfen Bewegungen"}</div></div>
+    <div class="tile"><div class="l">davon 0DTE</div><div class="v">${fmtM(d.net_gex_zdte)}</div>
+      <div class="n">Verfall heute</div></div>
+    <div class="tile"><div class="l">Zero-Gamma</div><div class="v">${px(d.flip)}</div>
+      <div class="n">${d.flip?`${fmt(Math.abs(d.spot-d.flip))} Pkt ${d.spot>d.flip?"darunter":"darüber"}`:"—"}</div></div>
+    <div class="tile"><div class="l">Max Pain</div><div class="v">${px(d.max_pain)}</div>
+      <div class="n">Verfalls-Gravitation</div></div>
+    <div class="tile"><div class="l">Gamma-Pin</div><div class="v">${px(d.gamma_pin)}</div>
+      <div class="n">stärkster Einzelmagnet</div></div>
+    <div class="tile"><div class="l">Put / Call</div><div class="v">${d.pcr?d.pcr.toFixed(2):"—"}</div>
+      <div class="n">${fmtM(d.put_oi)} Put · ${fmtM(d.call_oi)} Call</div></div>
+    <div class="tile"><div class="l">Netto-Vanna</div><div class="v">${fmtM(g.vanna)}</div>
+      <div class="n">je Vola-Punkt</div></div>
+    <div class="tile"><div class="l">Netto-Charm</div><div class="v">${fmtM(g.charm)}</div>
+      <div class="n">Delta-Zerfall je Tag</div></div>
+  </div>`;
+
+  const walls=[...(d.call_walls||[]).map(w=>({...w,r:"resist"})),
+               ...(d.put_walls||[]).map(w=>({...w,r:"support"}))].sort((a,b)=>b.price-a.price);
+  if(walls.length){
+    const mx=Math.max(...walls.map(w=>w.oi))||1;
+    h+=`<div class="sec">OI-Wände · ±6 % um den Kurs</div>`+walls.map(w=>`
+      <div class="brow"><span class="k" style="color:var(--${w.r})">${px(w.price)}</span>
+      <span class="bar" style="--c:var(--${w.r})"><i style="width:${(w.oi/mx*100).toFixed(0)}%"></i></span>
+      <span class="v">${fmtM(w.oi)}</span></div>`).join("");
+  }
+  if((d.fresh_flow||[]).length){
+    const mx=Math.max(...d.fresh_flow.map(x=>x.voi))||1;
+    h+=`<div class="sec">Fresh Flow · Volumen gegen stehendes OI</div>`+d.fresh_flow.map(x=>`
+      <div class="brow"><span class="k">${px(x.strike)}</span>
+      <span class="bar" style="--c:var(--agent)"><i style="width:${(x.voi/mx*100).toFixed(0)}%"></i></span>
+      <span class="v">${x.voi.toFixed(1)}×</span></div>`).join("");
+  }
+  if((d.expiries||[]).length){
+    const mx=Math.max(...d.expiries.map(e=>Math.abs(e.single)))||1;
+    h+=`<div class="sec">Verfallsleiter · Netto-Gamma je Verfall</div>`+d.expiries.map(e=>`
+      <div class="brow"><span class="k" style="font-size:11.5px">${e.expiry.slice(5)}</span>
+      <span class="bar" style="--c:${e.single<0?"var(--warn)":"var(--support)"}"><i style="width:${(Math.abs(e.single)/mx*100).toFixed(0)}%"></i></span>
+      <span class="v">${fmtM(e.single)}</span></div>`).join("");
+  }
+  h+=`<div class="foot">Vorzeichen: Calls positiv, Puts negativ — die übliche Annahme, nicht gemessen.
+    Für gemessene Vorzeichen bräuchte es die Fluss-Klassifikation aus zwei Snapshots.
+    Zero-Gamma wird über ein Preisgitter neu gerechnet, nicht als stärkster Gamma-Strike genommen:
+    der klebt per Konstruktion am Geld.</div>`;
+  el.innerHTML=h;
+}
+
+function renderAgent(){
+  const el=$("p-agent");
+  const list = S.messages.slice(-40);
+  const body = list.length ? list.map(m=>`
+    <div class="msg ${m.role}">
+      <div class="mh">${m.role==="proactive"?"● "+esc(m.trigger||"MELDUNG").toUpperCase()
+        : m.role==="user"?"DU":"AGENT"}<span class="ts">${hhmm(m.ts)}</span></div>
+      ${esc(m.text)}
+      ${m.why&&m.role==="proactive"?`<div class="why">Auslöser: ${esc(m.why)}</div>`:""}
+    </div>`).join("")
+    : '<div class="empty">Der Agent beobachtet im 20-Sekunden-Takt.<br>Er meldet sich, sobald ein Auslöser greift — Zonenkontakt, Regimewechsel, Wandbewegung oder ein Termin.</div>';
+  const model=S.budget?.model;
+  el.innerHTML = body + `
+    <div class="composer">
+      <input id="askInput" placeholder="Frage an den Agenten…" autocomplete="off" enterkeyhint="send">
+      <button id="askBtn">Senden</button>
+    </div>
+    <div class="foot">${model
+      ? `Modell ${esc(model)} · Budget ${S.budget.used}/${S.budget.limit} heute`
+      : "Ohne GEMINI_API_KEY antwortet der Agent aus der Engine — jede Zahl stammt aus der Rechnung, keine wird erfunden."}</div>`;
+  $("askBtn").onclick=ask;
+  $("askInput").onkeydown=e=>{ if(e.key==="Enter") ask(); };
+}
+
+async function ask(){
+  const inp=$("askInput"); const t=(inp.value||"").trim();
+  if(!t||S.busy) return;
+  S.busy=true; $("askBtn").disabled=true; inp.value=""; inp.blur(); buzz(8);
+  try{
+    await fetch("/api/agent/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({market:S.market,text:t})});
+    await loadMessages();
+    $("v-agent").scrollTop=$("v-agent").scrollHeight;
+  }catch(e){}
+  S.busy=false; const b=$("askBtn"); if(b) b.disabled=false;
+}
+
+function renderPlan(){
+  const el=$("p-plan"), p=S.plan;
+  if(!p||!p.body){ el.innerHTML='<div class="empty">Noch kein Tagesplan. Er entsteht ab 8 Uhr.</div>'; return; }
+  const b=p.body;
+  el.innerHTML=`<div class="plan">
+    <h4>Rückblick</h4><p>${esc(b.rueckblick)}</p>
+    <h4>Nachrichtenlage</h4><ul>${(b.nachrichten||[]).map(x=>`<li>${esc(x)}</li>`).join("")}</ul>
+    <h4>Struktur &amp; Levels</h4><ul>${(b.struktur||[]).map(x=>`<li>${esc(x)}</li>`).join("")}</ul>
+    ${(b.marken||[]).length?`<h4>Marken und das Gamma daran</h4>
+      <ul>${b.marken.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>
+      <div class="hint">Gemessen wird das Netto-Gamma der ganzen Kette an diesem Preis,
+        nicht die Strikes in der Nähe — eine weit entfernte Wand mit großem Bestand
+        wirkt hier noch, eine nahe mit leerem Bestand gar nicht.</div>`:""}
+    <h4>Tages-Bias</h4><div class="bias">${esc(b.bias.split(".")[0])}</div><p>${esc(b.bias)}</p>
+    <h4>Worauf achten</h4><ul>${(b.watch||[]).map(x=>`<li>${esc(x)}</li>`).join("")}</ul>
+    ${(p.updates||[]).length?"<h4>Anpassungen im Tagesverlauf</h4>"+p.updates.map(u=>
+      `<div class="upd"><div class="t">${hhmm(u.ts)}</div>${esc(u.text)}
+       <div class="why">Auslöser: ${esc(u.why)}</div></div>`).join(""):""}
+    <div class="foot">Erstellt ${hhmm(p.created)}. Der Morgentext bleibt unangetastet — Änderungen
+      werden angehängt, und nur wenn sich strukturell wirklich etwas ändert.</div>
+  </div>`;
+}
+
+// ======================= Navigation =======================
+const track=$("track");
+function goto(i){
+  S.view=i; buzz(6);
+  // Ausserhalb des Charts gibt es nichts, wofuer die Leiste Platz machen
+  // muesste - dort waere ihr Fehlen nur ein Verlust ohne Gegenwert.
+  if(i!==0) tuck(false);
+  track.scrollTo({left:i*track.clientWidth, behavior:"smooth"});
+  document.querySelectorAll(".tb").forEach((b,n)=>b.classList.toggle("on",n===i));
+  if(i===3){ $("badge").hidden=true; }
+  if(i===4 && !S.plan) loadPlan();
+}
+document.querySelectorAll(".tb").forEach(b=>b.onclick=()=>goto(+b.dataset.v));
+track.addEventListener("scroll",()=>{
+  const i=Math.round(track.scrollLeft/track.clientWidth);
+  if(i!==S.view){
+    S.view=i;
+    document.querySelectorAll(".tb").forEach((b,n)=>b.classList.toggle("on",n===i));
+    if(i===3) $("badge").hidden=true;
+    if(i===4 && !S.plan) loadPlan();
+  }
+},{passive:true});
+
+// ======================= Sheets =======================
+function openSheet(html){ $("sheetBody").innerHTML=html; $("sheet").classList.add("on"); $("scrim").classList.add("on"); }
+function closeSheet(){ $("sheet").classList.remove("on"); $("scrim").classList.remove("on"); }
+$("scrim").onclick=closeSheet;
+$("sheetClose").onclick=closeSheet;
+
+// Nach unten wischen schliesst - auf einem Telefon die erwartete Geste,
+// und der einzige verlaessliche Weg, wenn das Sheet fast den ganzen
+// Bildschirm fuellt und "daneben tippen" kaum Flaeche laesst.
+(function(){
+  const sh=$("sheet"); let y0=null;
+  const zone=$("grabzone");
+  const start=e=>{ y0=e.touches[0].clientY; sh.style.transition="none"; };
+  const move=e=>{
+    if(y0==null) return;
+    const dy=Math.max(0, e.touches[0].clientY-y0);
+    sh.style.transform=`translateY(${dy}px)`;
+  };
+  const end=e=>{
+    if(y0==null) return;
+    const dy=Math.max(0,(e.changedTouches[0]?.clientY??y0)-y0);
+    sh.style.transition=""; sh.style.transform="";
+    if(dy>70){ buzz(8); closeSheet(); }
+    y0=null;
+  };
+  [zone, sh].forEach(el=>{
+    el.addEventListener("touchstart",start,{passive:true});
+    el.addEventListener("touchmove",move,{passive:true});
+    el.addEventListener("touchend",end,{passive:true});
+  });
+})();
+
+/** Preisraum messen: eine Ablesung aus der Plattform des Nutzers.
+
+    Bewusst keine Formel. Die Basis eines Future haengt an Restlaufzeit,
+    Zins und Dividenden, und darauf legt jeder Broker seinen eigenen
+    Aufschlag - was die Plattform anzeigt, weiss nur die Plattform. Eine
+    einzige Ablesung ist genauer als jede Schaetzung. */
+function spaceSheet(){
+  const sp = S.data?.space || {};
+  const ref = S.data?.spot;
+  const alter = sp.at ? Math.round((Date.now()/1000 - sp.at)/3600) : null;
+  openSheet(`<div class="sh-t">Preisraum der Anzeige</div>`
+    +`<div class="sh-n">Der Terminal rechnet im Index-Preisraum — dort stehen die
+      Optionsketten, die Wände und das Zero-Gamma. Gehandelt wird ein CFD, und der
+      steht nicht auf demselben Wert: ein CFD auf den Nasdaq 100 folgt dem Future
+      und trägt dessen Basis, je nach Restlaufzeit einige zehn Punkte.
+      <br><br>Trag den Kurs ein, den deine Plattform <b>gerade jetzt</b> zeigt.
+      Der Versatz wird daraus gemessen und auf jede angezeigte Zahl gelegt —
+      Kerzen, Wände und Achse bleiben unverändert aufeinander liegen, denn
+      gerechnet wird weiter im Index-Preisraum.</div>`
+    +`<div class="sp-row"><label>Instrument</label>
+        <input id="spName" type="text" value="${esc(sp.name||"USTEC")}"
+               maxlength="12" autocomplete="off"></div>`
+    +`<div class="sp-row"><label>Kurs jetzt</label>
+        <input id="spQuote" type="text" inputmode="decimal"
+               placeholder="${ref?Math.round(ref+ (sp.offset||0)):"z. B. 29465"}"
+               autocomplete="off"></div>`
+    +`<div class="sh-n">Referenz im selben Moment: <b>${fmt(ref)}</b> (Index)
+      ${sp.name?`<br>Aktuell: ${esc(sp.name)} ${sgn(Math.round(sp.offset))} Punkte,
+        gemessen vor ${alter!=null?(alter<1?"unter einer Stunde":alter+" h"):"—"}
+        ${sp.stale?`<br><b style="color:var(--warn)">Älter als ein Tag — die Basis
+          läuft zum Verfall hin auf null zu, bitte nachmessen.</b>`:""}`:""}</div>`
+    +`<div class="sp-btns">
+        <button class="sp-b prim" id="spSave">Messen</button>
+        ${sp.name?`<button class="sp-b" id="spClear">Zurück auf Index</button>`:""}
+      </div>`
+    +`<div id="spMsg" class="sh-n"></div>`);
+  const msg = t => $("spMsg").innerHTML = t;
+  $("spSave").onclick = async () => {
+    const raw = ($("spQuote").value||"").replace(/\./g,"").replace(",",".").trim();
+    const q = parseFloat(raw);
+    if(!isFinite(q)){ msg('<b style="color:var(--warn)">Bitte einen Kurs eingeben.</b>'); return; }
+    try{
+      const r = await fetch(`/api/space?market=${S.market}`, {method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({name: $("spName").value, quote: q})});
+      const d = await r.json();
+      if(!d.ok){ msg(`<b style="color:var(--warn)">${esc(d.error||"nicht übernommen")}</b>`); return; }
+      buzz(12); closeSheet(); await load();
+    }catch(e){ msg('<b style="color:var(--warn)">Server nicht erreichbar.</b>'); }
+  };
+  if($("spClear")) $("spClear").onclick = async () => {
+    await fetch(`/api/space?market=${S.market}`, {method:"DELETE"});
+    buzz(8); closeSheet(); await load();
+  };
+}
+
+$("idbtn").onclick=()=>{
+  const src=S.overview.length?S.overview:Object.keys(SYM).map(k=>({key:k,name:k}));
+  openSheet(`<div class="sh-t">Markt</div>`+src.map(m=>`
+    <div class="si ${m.key===S.market?"sel":""}" data-m="${m.key}">${esc(m.name)}
+      <span class="sub">${m.key===S.market && S.data?.space?.name
+        ? esc(S.data.space.name) : (SYM[m.key]||m.key)}${
+        m.spot?" · "+(m.key===S.market?px:fmt)(m.spot):""}</span></div>`).join("")
+    +`<div class="sh-t" style="padding-top:14px">Preisraum der Anzeige</div>`
+    +`<div class="si" id="spOpen">${S.data?.space?.name
+        ? esc(S.data.space.name)+" "+sgn(Math.round(S.data.space.offset))+" Punkte"
+        : "Index-Preisraum"}
+        <span class="sub">${S.data?.space?.name
+          ? (S.data.space.stale?"nachmessen ⚠":"nachmessen")
+          : "auf deinen CFD einstellen"}</span></div>`
+    +`<div class="sh-n">Kurse und Strikes kommen bei jedem Markt aus derselben Cboe-Kette — sie liegen
+      im selben Preisraum und brauchen keine Umrechnung. Dein CFD steht daneben: er folgt dem
+      Future und trägt dessen Basis. Der Versatz wird gemessen, nicht geschätzt.</div>`
+    // Warum der Kurs verzoegert ist, und was dagegen hilft.
+    //
+    // In der Kopfzeile steht "15 min verzoegert", aber nicht, dass sich
+    // das aendern LAESST. Ohne diesen Hinweis liest sich die Zeile wie
+    // eine Eigenschaft der App statt wie ein fehlender Schritt.
+    +`<div class="sh-t" style="padding-top:14px">Live-Kurse</div>`
+    +`<div class="sh-n">${S.data?.live?.live
+      ? `Läuft: der Chart kommt gerade aus <b>${esc(S.data.live.symbol||"der Brücke")}</b>
+         ${S.data.live.src==="oanda"
+            ? `— das ist <b>OANDAs</b> CFD über den Server, nicht der deines Brokers.
+               Der Unterschied ist Spread und Finanzierung, ein paar Punkte, und der
+               gemessene Versatz gleicht ihn aus. Für deinen Kurs auf den Punkt:
+               <b>START-BRUECKE.bat</b> starten oder cTrader verbinden, beide haben
+               Vorrang.`
+            : S.data.live.src==="ctrader"
+            ? `— dein eigener Broker über cTrader, ohne dass dein PC laufen muss.`
+            : `— dein eigener Broker über die Brücke.`}
+         Letzter Tick vor ${Math.round(S.data.live.tick_age||0)} Sekunden.`
+      : `Der Chart hängt gerade an der öffentlichen Cboe-Quelle, und die ist
+         <b>15 Minuten verzögert</b> — gemessen, nicht geschätzt: auch der
+         Cboe-Kurs selbst läuft den Kerzen nicht voraus. Eine kostenlose
+         Echtzeitquelle für den Nasdaq gibt es nicht.
+         <br><br>Deinen echten Kurs hat nur dein Broker. Die Brücke holt ihn
+         aus MetaTrader 5 auf deinem PC:
+         <b>bridge/START-BRUECKE.bat</b> doppelklicken, MT5 offen lassen —
+         dann steht hier LIVE und der Punkt oben wird grün.
+         <br><br>Ohne PC geht es auf zwei Wegen:
+         <br>• <b>cTrader</b> (FTMO und andere) — dein <i>eigener</i> Kurs über den
+         Server. Kennung und Geheimnis bei Render eintragen, dann einmal
+         <b>/api/ctrader/login</b> öffnen und zustimmen.
+         <br>• <b>OANDA</b> — ein kostenloses Übungskonto, Schlüssel als
+         <b>OANDA_TOKEN</b> bei Render. Das ist dann OANDAs CFD, nicht deiner.
+         <br><br>Rangfolge: Brücke → cTrader → OANDA → verzögert. Du kannst alles
+         nebeneinander einrichten; der Chart nimmt automatisch die beste Quelle.`}</div>`);
+  $("spOpen").onclick = () => spaceSheet();
+  $("sheetBody").querySelectorAll("[data-m]").forEach(el=>el.onclick=()=>switchMarket(el.dataset.m));
+};
+
+function layerSheet(){
+  const items=[["tpo","TPO-Profil","wo der Markt WIE LANGE war"],
+               ["va","Value Area","wo 70 % des Volumens liefen"],
+               ["gpbox","GP-Beschriftung","Kasten am Level statt nur an der Skala"],
+               ["gcurve","Gamma-Kurve","nur beim Herauszoomen aussagekräftig"],
+               ["orbs","Wand-Verlauf","Orb-Ketten aus allen Optionsketten"],
+               ["fix","Fixe Level","aus dem Zonenbuch"],
+               ["live","Geisterlinien","wohin die Wand seither wanderte"],
+               ["zonen","Konfluenz-Zonen","getönte Bänder"],
+               ["profil","Volumenprofil","wo WIEVIEL gehandelt wurde"],
+               ["session","Struktur-Marken","POC, Vortageshoch und -tief"]];
+  openSheet(`<div class="sh-t">Struktur im Chart</div>`+items.map(([k,l,s])=>`
+    <div class="si ${S.layers[k]?"on":""}" data-l="${k}"><span class="box"></span>${l}
+      <span class="sub">${s}</span></div>`).join("")
+    +`<div class="sh-t" style="padding-top:14px">Volumenprofil</div>`
+    +[["heat","Innen / Außen","Weiß in der Value Area, Grau außerhalb"],
+      ["side","Optionsseite","Violett = Put-lastig, Gold = Call-lastig"]]
+      .map(([k,l,sub])=>`<div class="si ${S.profileMode===k?"sel":""}" data-pm="${k}">${l}
+        <span class="sub">${sub}</span></div>`).join("")
+    +`<div class="sh-n">Volumenprofil und TPO sind zwei verschiedene Fragen, nicht zwei
+      Darstellungen derselben. Das Volumenprofil misst gehandeltes Volumen je Preis
+      (CME-Kontrakte aus dem Future, sonst das Stückvolumen des ETF). Das TPO zählt,
+      in wie vielen 30-Minuten-Perioden ein Preis überhaupt berührt wurde — ohne
+      Volumen. Beide laufen gleichzeitig und dürfen sich widersprechen: genau dieser
+      Widerspruch ist die Aussage.</div>`
+    +`<div class="sh-n">Die Farbe liegt jetzt beim TPO: seine Blöcke laufen von Blau für
+      Preise, durch die der Markt nur streifte, bis Rot für die, an denen er den halben
+      Tag stand. Beim Volumenprofil steckt die Stärke schon in der Balkenlänge, deshalb
+      trägt die Farbe dort die andere Frage — Weiß heißt innerhalb der Value Area,
+      Schiefergrau außerhalb.</div>`
+    +`<div class="sh-n">Rollenfarben statt Quellfarben: Gold ist Widerstand, Violett ist Support,
+      Beige ist Pivot. Woher ein Level stammt, steht im Text — nie in der Farbe.</div>`);
+  $("sheetBody").querySelectorAll("[data-pm]").forEach(el=>el.onclick=()=>{
+    S.profileMode=el.dataset.pm; buzz(6);
+    $("sheetBody").querySelectorAll("[data-pm]").forEach(x=>
+      x.classList.toggle("sel", x.dataset.pm===S.profileMode));
+    draw();
+  });
+  $("sheetBody").querySelectorAll("[data-l]").forEach(el=>el.onclick=()=>{
+    const k=el.dataset.l; S.layers[k]=!S.layers[k];
+    el.classList.toggle("on",S.layers[k]); buzz(6); draw();
+  });
+}
+
+// ======================= Start =======================
+addEventListener("resize",()=>{ resize(); track.scrollLeft=S.view*track.clientWidth; });
+new ResizeObserver(resize).observe($("cvwrap"));
+resize();
+// Kerzen zuerst, dann der Rest.
+//
+// Der volle Snapshot braucht beim kalten Dienst gemessen gut drei
+// Sekunden - er baut Kette, Gammagitter, Waende, Profil und TPO. Die
+// Kerzen allein sind in einem Bruchteil da, und sie sind das, was man
+// beim Aufmachen sehen will. Der Rest legt sich darueber, sobald er da
+// ist; bis dahin steht ein Chart statt eines Ladezeichens.
+ladeKerzen().then(()=>load());
+loadOverview(); loadMessages(); loadPlan(); loadTrails();
+setInterval(()=>{ load(); loadMessages(); }, 20000);
+setInterval(loadOverview, 60000);
+setInterval(loadTrails, 60000);
+</script>
+</body>
+</html>

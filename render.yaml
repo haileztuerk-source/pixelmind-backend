@@ -1,4 +1,5 @@
 services:
+  # Bestehender Bilddienst - unveraendert.
   - type: web
     name: pixelmind-backend
     runtime: python
@@ -7,4 +8,48 @@ services:
     envVars:
       - key: REPLICATE_API_TOKEN
         sync: false   # you enter this in Render dashboard
+    plan: free
+
+  # ChartTerminal Cloud - die Handy-Fassung.
+  # Genau EIN Worker: der Beobachtungs-Thread des Agenten darf nicht
+  # mehrfach laufen, sonst meldet er jedes Ereignis doppelt.
+  - type: web
+    name: chartterminal
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --workers 1 --threads 8 --timeout 120 terminal_app:app
+    healthCheckPath: /health
+    envVars:
+      # Verbindungszeichenfolge aus Neon. Ohne sie laeuft der Dienst
+      # weiter, verliert aber bei jedem Neustart Zonenbuch und Verlauf.
+      - key: DATABASE_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false   # optional - ohne Key antwortet der Agent aus der Engine
+      # Gemeinsames Geheimnis der MT5-Bruecke. Ohne gesetzten Wert nimmt
+      # der Dienst gar keine Live-Kurse an - geschlossen, nicht offen.
+      # Denselben Wert traegt bridge/mt5_bridge.py auf dem PC.
+      - key: LIVE_TOKEN
+        sync: false
+      # Zweiter Weg zu Live-Kursen, ohne dass ein PC laufen muss: ein
+      # kostenloses OANDA-Uebungskonto. Der Server holt den Kurs selbst.
+      # Das ist OANDAs CFD, nicht der des eigenen Brokers - die Bruecke
+      # behaelt deshalb immer Vorrang. Ohne Schluessel bleibt der Abruf
+      # aus und nichts aendert sich.
+      - key: OANDA_TOKEN
+        sync: false
+      - key: OANDA_ENV
+        value: "practice"   # practice = Uebungskonto, live = echtes Konto
+      - key: SCAN_INTERVAL
+        value: "20"
+      - key: AGENT_DAY_BUDGET
+        value: "1400"
+      - key: ANCHOR_HOUR
+        value: "6"      # Tagesanker in UTC, wie TAGES_ANKER_STUNDE im Original
+      # Wachhalten nur waehrend der Handelszeit. Rund um die Uhr wuerde
+      # ein einzelner Dienst die 750 Freistunden des Accounts aufbrauchen.
+      - key: KEEPALIVE_HOURS
+        value: "12-21"  # UTC, deckt Vorboerse bis Abrechnung ab
+      - key: KEEPALIVE_WEEKDAYS
+        value: "1"
     plan: free

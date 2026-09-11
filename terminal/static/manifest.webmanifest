@@ -1,0 +1,33 @@
+{
+  "name": "ChartTerminal",
+  "short_name": "ChartTerminal",
+  "description": "Gamma-Level, Zonen und Terminal Agent fuer NDX, SPX, DJX, RUT und Gold",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0A0C11",
+  "theme_color": "#0A0C11",
+  "categories": [
+    "finance",
+    "productivity"
+  ],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

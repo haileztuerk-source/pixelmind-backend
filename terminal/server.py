@@ -1,0 +1,662 @@
+"""ChartTerminal Cloud - Flask-Server.
+
+Liefert das Frontend und alle Datenendpunkte. Ein Hintergrund-Thread
+haelt die Snapshots frisch und laesst den Agenten beobachten; er arbeitet
+nur fuer Maerkte, die zuletzt wirklich abgerufen wurden, damit eine
+schlafende Instanz keine Daten zieht.
+"""
+
+import os
+import hmac
+import time
+import threading
+from datetime import datetime, timezone
+
+from flask import Flask, jsonify, request, send_from_directory, redirect
+from flask_cors import CORS
+
+from . import market, cboe, gex, zones, news, walls, oanda, ctrader
+from .agent import AGENT
+from .daybook import BOOK
+from . import keepalive, store
+from .walltrail import TRAIL
+from .broker import SPACE
+from .live import FEED, token as live_token
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+STATIC = os.path.join(HERE, "static")
+
+SCAN_INTERVAL = int(os.environ.get("SCAN_INTERVAL", "20"))
+ACTIVE_TTL = 600          # so lange gilt ein Markt nach dem letzten Abruf als aktiv
+
+app = Flask(__name__, static_folder=None)
+CORS(app)
+
+_snapshots = {}
+_active = {}
+_lock = threading.Lock()
+
+
+def _touch(key):
+    with _lock:
+        _active[key] = time.time()
+
+
+def _market_arg():
+    """Marktschluessel aus der Anfrage, geprueft.
+
+    Vorher wies nur /api/state unbekannte Maerkte ab; die uebrigen
+    Endpunkte lieferten stillschweigend die Standardwerte - ein Tippfehler
+    im Symbol sah dann aus wie ein Ergebnis.
+    """
+    key = request.args.get("market", market.DEFAULT_MARKET)
+    if key not in market.MARKETS:
+        return None
+    return key
+
+
+def _active_markets():
+    now = time.time()
+    with _lock:
+        return [k for k, t in _active.items() if now - t < ACTIVE_TTL]
+
+
+def _live_chart(key, conf_chain, interval):
+    """Hauptchart aus der Bruecke, wenn sie laeuft - sonst nichts.
+
+    Die Kerzen kommen im Preisraum des gehandelten Instruments herein
+    (USTEC, NAS100), die Waende stehen im Preisraum des Index. Beide
+    muessen auf dieselbe Achse, sonst liegt eine Wand an der falschen
+    Kerze.
+
+    Umgerechnet werden die Kerzen, nicht die Waende: intern bleibt
+    alles im Index-Preisraum, damit Zonenbuch, Agent und Vergleiche
+    ueber Tage hinweg dieselben Zahlen behalten - auch dann noch, wenn
+    die Bruecke einmal ausfaellt. Die Anzeige legt den Versatz am Ende
+    wieder drauf, sodass der Nutzer seine eigenen Kurse liest. Beides
+    zusammen ist verlustfrei: derselbe Wert wird abgezogen und wieder
+    addiert.
+
+    Die Basis wird SYNCHRON gemessen. Der Live-Kurs mit dem 15 Minuten
+    alten Indexkurs verglichen ergaebe nicht die Basis, sondern die
+    Basis plus eine Viertelstunde Marktbewegung - deshalb der Kurs des
+    Instruments aus genau jener Minute.
+    """
+    st = FEED.state(key)
+    if not st.get("live"):
+        return None
+    raw = FEED.bars(key)
+    if len(raw) < 30:
+        return None
+
+    # Das Bezugspaar kommt aus EINER Quelle und EINER Minute: die letzte
+    # Cboe-Minutenkerze traegt Zeit und Indexkurs zusammen. Der Spot der
+    # Kette waere ungenauer - sein Zeitstempel ist ein Text, und ob er
+    # zum selben Moment gehoert, steht nirgends.
+    idx = cboe.intraday(conf_chain, ttl=45)[0]
+    if not idx:
+        return None
+    ref_t, ref_p = idx[-1]["t"], idx[-1]["c"]
+
+    then = FEED.at(key, ref_t)
+    if not then:
+        return None
+    offset = then - ref_p
+    index_spot = ref_p
+    if abs(offset) > index_spot * 0.01:
+        return None            # kein plausibler Basiswert, lieber verzichten
+
+    minutes = market._TF_MIN.get(interval, 15)
+    shifted = [{"t": b["t"], "v": b.get("v") or 0.0,
+                "o": b["o"] - offset, "h": b["h"] - offset,
+                "l": b["l"] - offset, "c": b["c"] - offset} for b in raw]
+    bars = cboe.aggregate(shifted, minutes) if minutes > 1 else shifted
+    if not bars:
+        return None
+    return {
+        "bars": bars,
+        "spot": (st["price"] - offset) if st.get("price") else bars[-1]["c"],
+        "offset": offset,
+        "ref": ref_p,
+        "symbol": st.get("symbol"),
+        "state": st,
+        # Woher der Kurs kommt, steht jetzt im Feed - fest "bridge"
+        # hineinzuschreiben liesse einen OANDA-Kurs als eigenen Broker
+        # erscheinen, und das ist genau der Unterschied, den der Nutzer
+        # sehen muss.
+        "src": {"source": st.get("src") or "bridge",
+                "symbol": st.get("symbol") or "live", "stale": False},
+    }
+
+
+def build_snapshot(key, interval="15m"):
+    """Rechnet das vollstaendige Bild fuer einen Markt."""
+    conf = market.MARKETS.get(key) or market.MARKETS[market.DEFAULT_MARKET]
+
+    chain = cboe.chain(conf["chain"], ttl=120)
+    gexp = gex.profile(chain)
+    bars, src = market.bars(key, interval)
+
+    # Laeuft die Bruecke, ersetzt ihr Chart den oeffentlichen - er ist
+    # live und zeigt genau das Instrument, das gehandelt wird.
+    lc = _live_chart(key, conf["chain"], interval)
+    if lc:
+        bars, src = lc["bars"], lc["src"]
+
+    # ATR bevorzugt aus Tagesbars; wenn Yahoo drosselt, aus der
+    # Intraday-Spanne hochgerechnet statt auf null zu fallen.
+    daily, _ = market.bars(key, "1d")
+    if len(daily) > 15:
+        atr_v = market.atr(daily)
+        session = market.session_levels(daily)
+    else:
+        atr_v = market.atr(bars) * 4 if bars else 0.0
+        session = {}
+    session.update(market.overnight_range(bars))
+
+    # Zwei getrennte Profile, weil es zwei verschiedene Fragen sind.
+    #
+    # Das Volumenprofil fragt: wo wurde WIEVIEL gehandelt. Es braucht
+    # echtes Tapevolumen - CME-Kontrakte aus dem Future, sonst das
+    # Stueckvolumen des ETF. Beides ist gehandeltes Volumen, nur an
+    # verschiedenen Boersen.
+    #
+    # Das TPO fragt: wo war der Markt WIE LANGE. Es braucht ueberhaupt
+    # kein Volumen, nur Hoch und Tief je Minute - und darf deshalb nie
+    # daran scheitern, dass eine Volumenquelle klemmt.
+    idx_spot = gexp.get("spot") if gexp.get("ok") else None
+    pbars, pratio, psym, pkind = market.profile_bars(key, index_spot=idx_spot)
+    if pbars:
+        vp = market.volume_profile(pbars, kind=pkind)
+        vp["source"] = psym
+        vp["ratio"] = pratio
+    else:
+        # Kein gehandeltes Volumen erreichbar. Dann das Optionsvolumen
+        # der Kette - eine andere Groesse, und sie wird auch so benannt.
+        raw, _stale = cboe.intraday(conf["chain"])
+        vp = market.volume_profile(raw or bars, kind="options") if (raw or bars) else {}
+        if vp:
+            vp["source"] = conf["chain"]
+
+    # Eigene Quellenkette fuers TPO: die Cboe-Minutenbars liegen bereits
+    # im Preisraum des Index und beschreiben dieselbe Sitzung.
+    tbars, tsrc = pbars, psym
+    if not tbars:
+        tbars, _stale = cboe.intraday(conf["chain"])
+        tsrc = conf["chain"]
+    tpo = market.tpo_profile(tbars) if tbars else {}
+    if tpo:
+        tpo["source"] = tsrc
+
+    # Der Spot kommt aus der Bruecke, wenn sie laeuft: er ist der Kurs von
+    # jetzt, der Kettenspot der von vor einer Viertelstunde.
+    spot = (lc["spot"] if lc
+            else (gexp.get("spot") if gexp.get("ok") else None)
+            or (bars[-1]["c"] if bars else None))
+
+    # Vortagsprofil aus dem Gedaechtnis des Zonenbuchs dazunehmen - es
+    # laesst sich aus keiner freien Quelle nachtraeglich holen.
+    vprev = (BOOK.view(key, {"spot": spot}) or {}).get("va_prev") or {}
+    if vprev.get("poc"):
+        session = dict(session, pdpoc=vprev.get("poc"),
+                       pdvah=vprev.get("vah"), pdval=vprev.get("val"))
+
+    zone_list, levels = zones.build(gexp, vp, session, atr_v, spot) if spot else ([], [])
+
+    # Wieviel Dealer-Gamma haengt an jeder entscheidenden Marke? Das ist
+    # es, was ein Level von einer Zahl zu einer Erwartung macht - ein
+    # Vortageshoch mit stuetzendem Gamma ist eine Kante, dasselbe Hoch
+    # ohne Gamma nur eine Linie.
+    lgex = []
+    if spot and gexp.get("ok") and levels:
+        lgex = gex.level_gamma(chain.get("contracts") or [], levels, spot,
+                               flip=gexp.get("flip"), atr=atr_v)
+        for x in lgex:
+            x["verdict"] = gex.level_verdict(x, spot, gexp.get("regime"))
+        lgex.sort(key=lambda x: abs(x["price"] - spot))
+    digest = news.digest()
+
+    snap = {
+        "market": key,
+        "market_name": conf["name"],
+        "interval": interval,
+        "spot": spot,
+        "atr": atr_v,
+        "bars": bars,
+        "bar_source": src,
+        "vp": vp,
+        "tpo": tpo,
+        "session": session,
+        # Handelszeit. Damit die Oberflaeche "geschlossen" sagen kann,
+        # statt still auszusehen wie kaputt - und dazu das Alter des
+        # letzten Balkens, denn nur das beweist, ob wirklich etwas
+        # laeuft. Feiertage kennt der Kalender nicht; ein Balken, der
+        # bei angeblich offener Boerse alt bleibt, verraet sie trotzdem.
+        "clock": market.us_session(),
+        "bar_age": (datetime.now(timezone.utc).timestamp() - bars[-1]["t"]
+                    if bars else None),
+        "zones": zone_list,
+        "levels": levels,
+        "level_gex": lgex,
+        "calendar": digest["calendar"],
+        "headlines": digest["headlines"],
+        "sentiment": digest.get("sentiment") or {},
+        "ts": datetime.now(timezone.utc).isoformat(),
+        # Der Chart ist live, sobald die Bruecke laeuft. Die Waende
+        # bleiben verzoegert - Open Interest aendert sich nicht im
+        # Sekundentakt, dort kostet die Viertelstunde nichts.
+        "delayed_minutes": 0 if lc else 15,
+        "live": dict(lc["state"], offset=lc["offset"]) if lc
+                else FEED.state(key),
+    }
+    # Session-Marken flach mitfuehren, damit Agent und Frontend sie ohne
+    # Umweg ueber das verschachtelte Dict lesen koennen.
+    snap.update({k: session.get(k) for k in ("on_high", "on_low", "on_day",
+                                             "pdh", "pdl", "pwh", "pwl")})
+
+    if gexp.get("ok"):
+        snap.update({
+            "regime": gexp["regime"],
+            "net_gex": gexp["net_gex"],
+            "net_gex_zdte": gexp["net_gex_zdte"],
+            "flip": gexp["flip"],
+            "curve": gexp["curve"],
+            "call_wall": gexp["call_walls"][0]["price"] if gexp["call_walls"] else None,
+            "put_wall": gexp["put_walls"][0]["price"] if gexp["put_walls"] else None,
+            "call_walls": gexp["call_walls"],
+            "put_walls": gexp["put_walls"],
+            "max_pain": gexp["max_pain"],
+            "gamma_pin": gexp["gamma_pin"],
+            "pcr": gexp["pcr"],
+            "greeks": gexp["greeks"],
+            "expiries": gexp["expiries"],
+            "fresh_flow": gexp["fresh_flow"],
+            "rows": gexp["rows"],
+            "chain_ts": gexp["ts"],
+            "chain_stale": gexp["stale"],
+        })
+    else:
+        snap["regime"] = None
+        snap["chain_stale"] = True
+
+    # Leading Walls ueber alle Ketten des Marktes - Index und ETF.
+    #
+    # Hier stand, die ETF-Kette trage bei NDX rund das Hundertfache an
+    # Open Interest. In Kontrakten stimmt das ungefaehr - gemessen 78-fach
+    # am staerksten Strike -, aber Kontrakte sind nicht vergleichbar: ein
+    # NDX-Kontrakt laeuft auf 100 Indexpunkte, ein QQQ-Kontrakt auf 100
+    # Anteile, also das 41-fache je Stueck.
+    #
+    # Wirtschaftlich gemessen, im Band von zwei Prozent um den Kurs:
+    #   Nasdaq   Index 86 Mrd   ETF  96 Mrd   -> ETF 1,1-fach
+    #   S&P 500  Index 1937 Mrd ETF 158 Mrd   -> ETF 0,08-fach
+    #   Russell  Index 42 Mrd   ETF  39 Mrd   -> ETF 0,94-fach
+    #   Dow      Index 0,1 Mrd  ETF 2,9 Mrd   -> ETF 24-fach
+    #
+    # Beide Ketten zu lesen bleibt also richtig, aber aus einem anderen
+    # Grund als angenommen: nicht weil eine die andere erdrueckt, sondern
+    # weil je nach Markt mal die eine, mal die andere die Positionierung
+    # traegt. Beim S&P steckt 92 Prozent des Nominals im Index selbst,
+    # beim Dow ist der Index praktisch leer.
+    lw = walls.leading(key)
+    snap["leading_walls"] = lw["walls"]
+    snap["chain_ratios"] = lw["ratios"]
+    snap["wall_confluence"] = walls.confluence(lw["walls"], max(atr_v * 0.28, 1))
+    # Mit der Uhr des Charts stempeln, damit Orbs und Kerzen zusammenpassen.
+    _ts = bars[-1]["t"] if bars else None
+    TRAIL.record(key, lw["walls"], spot, ts=_ts)
+    # Wandernde Marken getrennt aufzeichnen. Sie sitzen auf keinem Strike -
+    # das Zero-Gamma ist die Nullstelle einer Kurve und wandert mit der
+    # impliziten Vola -, und es ist die Bewegung, die zaehlt: dass es 58
+    # Punkte entfernt steht, ist eine Zahl; dass es dem Kurs seit einer
+    # Stunde entgegenkommt, ist eine Aussage.
+    TRAIL.record_paths(key, {
+        "flip": snap.get("flip"),
+        "max_pain": snap.get("max_pain"),
+    }, ts=_ts)
+
+    # Zonenbuch zuletzt: es friert die Gamma-Felder ein, die erst oben
+    # gesetzt wurden. Erst dadurch sind die Waende ueber den Tag hinweg
+    # dieselben Zahlen - ohne das wandert jede Marke mit jedem Snapshot.
+    snap["fixed"] = BOOK.update(key, snap)
+
+    # Anzeige-Preisraum. Nur beschreibend: der Snapshot bleibt vollstaendig
+    # im Index-Preisraum, das Frontend verschiebt allein die ausgegebenen
+    # Zahlen. Wer hier die Preise selbst verschoebe, haette zwei
+    # Umrechnungen im Umlauf - siehe terminal/broker.py.
+    # Anzeige-Preisraum. Laeuft die Bruecke, misst sie ihn selbst und
+    # laufend - dann braucht es keine Ablesung von Hand mehr, und der
+    # Versatz kann auch nicht veralten. Sonst gilt die gespeicherte
+    # Messung.
+    if lc:
+        # Auch festhalten: faellt die Bruecke aus, bleibt die Anzeige im
+        # Preisraum des Brokers stehen, statt um mehrere zehn Punkte
+        # zurueckzuspringen.
+        SPACE.remember(key, lc["symbol"], lc["offset"], lc["ref"])
+        snap["space"] = {
+            "name": lc["symbol"] or "LIVE",
+            "offset": lc["offset"],
+            "at": time.time(), "age": 0.0, "stale": False,
+            "measured": "bridge",
+        }
+    else:
+        snap["space"] = SPACE.get(key)
+    return snap
+
+
+def snapshot(key, interval="15m", max_age=25):
+    """Snapshot aus dem Cache oder frisch gerechnet."""
+    _touch(key)
+    with _lock:
+        hit = _snapshots.get((key, interval))
+    if hit and time.time() - hit[0] < max_age:
+        return hit[1]
+    snap = build_snapshot(key, interval)
+    with _lock:
+        _snapshots[(key, interval)] = (time.time(), snap)
+    return snap
+
+
+def _scan_loop():
+    """Beobachtungstakt: lokal vergleichen, nur bei Anlass melden."""
+    while True:
+        try:
+            for key in _active_markets() or []:
+                snap = snapshot(key, "15m", max_age=SCAN_INTERVAL)
+                AGENT.observe(key, snap)
+                AGENT.maybe_update_plan(key, snap)
+                if datetime.now().hour >= 8:
+                    AGENT.plan(key, snap)
+        except Exception:
+            pass  # ein Fehler im Takt darf den Takt nicht beenden
+        time.sleep(SCAN_INTERVAL)
+
+
+threading.Thread(target=_scan_loop, daemon=True).start()
+# Live-Kurse ueber den Server, falls ein OANDA-Schluessel gesetzt ist.
+# Ohne Schluessel passiert hier nichts - die Bruecke und die verzoegerte
+# Quelle bleiben unberuehrt.
+oanda.start(_active_markets)
+# cTrader: der eigene Broker ueber das Netz, ohne PC. Haelt eine
+# dauerhafte Verbindung, sobald Kennung, Geheimnis und die einmalige
+# Zustimmung vorliegen.
+ctrader.start()
+keepalive.start()
+
+
+# ------------------------------------------------------------------ Routen
+@app.route("/health")
+def health():
+    return jsonify({"ok": True, "active": _active_markets(),
+                    "oanda": oanda.status(),
+                    "ctrader": ctrader.status(),
+                    "budget": AGENT.budget(),
+                    "keepalive": keepalive.status(),
+                    "store": store.health()})
+
+
+@app.route("/api/markets")
+def markets():
+    return jsonify([{"key": k, "name": v["name"], "chain": v["chain"]}
+                    for k, v in market.MARKETS.items()])
+
+
+@app.route("/api/state")
+def state():
+    key = _market_arg()
+    if not key:
+        return jsonify({"error": "unbekannter Markt"}), 400
+    interval = request.args.get("tf", "15m")
+    if interval not in market.INTERVALS:
+        return jsonify({"error": "unbekanntes Intervall"}), 400
+    snap = dict(snapshot(key, interval))
+    # Den Anzeige-Preisraum frisch nachtragen statt aus dem Snapshot zu
+    # nehmen: der ist bis zu 25 Sekunden alt, und eine gerade gemessene
+    # Kalibrierung soll sofort greifen und nicht erst beim naechsten
+    # Neuaufbau. Er kostet nichts - es ist ein Nachschlagen im Speicher.
+    if (snap.get("space") or {}).get("measured") != "bridge":
+        snap["space"] = SPACE.get(key)
+    if request.args.get("light") == "1":
+        for k in ("bars", "rows", "curve", "leading_walls", "tpo"):
+            snap.pop(k, None)
+    return jsonify(snap)
+
+
+@app.route("/api/candles")
+def candles():
+    key = _market_arg()
+    if not key:
+        return jsonify({"error": "unbekannter Markt"}), 400
+    interval = request.args.get("tf", "15m")
+    bars, src = market.bars(key, interval)
+    return jsonify({"bars": bars, "source": src})
+
+
+@app.route("/api/overview")
+def overview():
+    """Kurs und Tagesveraenderung aller Maerkte - fuer die Marktleiste.
+
+    Nutzt bewusst nur den Intraday-Endpunkt (rund 100 KB je Markt) statt
+    der vollen Ketten (6 MB je Markt). Regime und Waende gibt es erst,
+    wenn ein Markt wirklich geoeffnet wird.
+    """
+    out = []
+    for key, conf in market.MARKETS.items():
+        bars, _ = cboe.intraday(conf["chain"], ttl=90)
+        last = bars[-1]["c"] if bars else None
+        first = bars[0]["o"] if bars else None
+        out.append({
+            "key": key, "name": conf["name"], "chain": conf["chain"],
+            "spot": last,
+            "change": (last - first) if (last and first) else None,
+            "change_pct": ((last / first - 1) * 100) if (last and first) else None,
+        })
+    return jsonify(out)
+
+
+@app.route("/api/trails")
+def trails():
+    """Wand-Verlauf als Spuren - Datengrundlage der Orb-Ketten.
+
+    Bewusst ein eigener Endpunkt: der Verlauf waechst ueber den Tag und
+    hat in der 20-Sekunden-Abfrage des Zustands nichts verloren.
+    """
+    key = _market_arg()
+    if not key:
+        return jsonify({"error": "unbekannter Markt"}), 400
+    _touch(key)
+    return jsonify(TRAIL.series(key))
+
+
+@app.route("/api/book")
+def book():
+    key = _market_arg()
+    if not key:
+        return jsonify({"error": "unbekannter Markt"}), 400
+    return jsonify(BOOK.view(key, snapshot(key)))
+
+
+def _live_ok():
+    """Prueft das Geheimnis der Bruecke.
+
+    Vergleich in konstanter Zeit: ein Vergleich, der beim ersten
+    abweichenden Zeichen abbricht, verraet ueber die Antwortzeit, wie
+    viele Zeichen stimmten - damit laesst sich ein Geheimnis Zeichen fuer
+    Zeichen erraten.
+    """
+    want = live_token()
+    if not want:
+        return False        # ohne Geheimnis geschlossen, nicht offen
+    got = (request.headers.get("X-Live-Token")
+           or (request.args.get("token") or ""))
+    return hmac.compare_digest(want, got)
+
+
+@app.route("/api/live/bars", methods=["POST"])
+def live_bars():
+    """Kerzen der Bruecke: die Historie des gehandelten Instruments."""
+    if not _live_ok():
+        return jsonify({"error": "nicht berechtigt"}), 403
+    key = _market_arg()
+    if not key:
+        return jsonify({"error": "unbekannter Markt"}), 400
+    body = request.get_json(silent=True) or {}
+    n = FEED.put_bars(key, body.get("symbol"), body.get("bars"))
+    if not n:
+        return jsonify({"ok": False, "error": "keine brauchbaren Kerzen"}), 400
+    return jsonify({"ok": True, "bars": n})
+
+
+@app.route("/api/live/tick", methods=["POST"])
+def live_tick():
+    """Der letzte Kurs. Formt die laufende Kerze weiter."""
+    if not _live_ok():
+        return jsonify({"error": "nicht berechtigt"}), 403
+    key = _market_arg()
+    if not key:
+        return jsonify({"error": "unbekannter Markt"}), 400
+    body = request.get_json(silent=True) or {}
+    if not FEED.put_tick(key, body.get("symbol"), body.get("price"),
+                         body.get("ts")):
+        return jsonify({"ok": False, "error": "Kurs nicht lesbar"}), 400
+    return jsonify({"ok": True, **FEED.state(key)})
+
+
+@app.route("/api/live")
+def live_state():
+    """Zustand der Bruecke - ohne Geheimnis lesbar, es steht nichts drin."""
+    key = _market_arg()
+    if not key:
+        return jsonify({"error": "unbekannter Markt"}), 400
+    st = FEED.state(key)
+    st["configured"] = bool(live_token())
+    # Der zweite Weg gehoert mit in die Auskunft: ist gar nichts live,
+    # soll erkennbar sein, ob beide Wege fehlen oder nur einer.
+    st["oanda"] = oanda.status()
+    st["ctrader"] = ctrader.status()
+    return jsonify(st)
+
+
+def _ctrader_redirect():
+    """Die Weiterleitungsadresse - dieselbe, die bei der App-Registrierung
+    hinterlegt wird. Aus der Anfrage abgeleitet statt fest eingetragen,
+    damit sie auf einer eigenen Adresse genauso stimmt."""
+    return request.url_root.rstrip("/") + "/api/ctrader/callback"
+
+
+@app.route("/api/ctrader/login")
+def ctrader_login():
+    """Schickt den Nutzer einmal zu cTrader, um zuzustimmen."""
+    if not ctrader.configured():
+        return ("CTRADER_CLIENT_ID und CTRADER_CLIENT_SECRET fehlen. "
+                "Beides bei Render unter Environment eintragen."), 400
+    return redirect(ctrader.auth_url(_ctrader_redirect()))
+
+
+@app.route("/api/ctrader/callback")
+def ctrader_callback():
+    """Nimmt den Code der Zustimmung entgegen und tauscht ihn ein.
+
+    Antwortet als Seite, nicht als JSON: hier landet ein Mensch im
+    Browser, und der soll lesen koennen, ob es geklappt hat.
+    """
+    fehler = request.args.get("error")
+    code = request.args.get("code")
+    if fehler or not code:
+        return ("<h3>Nicht verbunden</h3><p>%s</p>"
+                % (fehler or "Kein Code erhalten.")), 400
+    t = ctrader.einloesen(code, _ctrader_redirect())
+    if not t:
+        st = ctrader.status()
+        return ("<h3>Nicht verbunden</h3><p>%s</p>"
+                % (st.get("fehler") or "Tausch fehlgeschlagen")), 400
+    ctrader.start()
+    return ("<h3>cTrader verbunden</h3>"
+            "<p>Du kannst dieses Fenster schliessen. Der Chart nimmt den "
+            "Kurs, sobald die Verbindung steht.</p>")
+
+
+@app.route("/api/ctrader/logout", methods=["POST"])
+def ctrader_logout():
+    ctrader.abmelden()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/space", methods=["GET", "POST", "DELETE"])
+def space():
+    """Anzeige-Preisraum lesen, messen oder aufheben.
+
+    Beim Messen kommt der Indexkurs NICHT aus einem eigenen Abruf,
+    sondern aus dem laufenden Snapshot. Zwei getrennte Abrufe waeren zwei
+    Zeitpunkte, und die Differenz zweier Zeitpunkte ist keine Basis,
+    sondern eine Basis plus die Bewegung dazwischen.
+    """
+    key = _market_arg()
+    if not key:
+        return jsonify({"error": "unbekannter Markt"}), 400
+
+    if request.method == "DELETE":
+        return jsonify(SPACE.clear(key))
+
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        ref = snapshot(key).get("spot")
+        if not ref:
+            return jsonify({"ok": False,
+                            "error": "kein Indexkurs verfuegbar"}), 503
+        res = SPACE.calibrate(key, body.get("name"), body.get("quote"), ref)
+        return jsonify(res), (200 if res.get("ok") else 400)
+
+    return jsonify(SPACE.get(key))
+
+
+@app.route("/api/agent/messages")
+def agent_messages():
+    key = _market_arg()
+    if not key:
+        return jsonify({"error": "unbekannter Markt"}), 400
+    _touch(key)
+    return jsonify({"messages": AGENT.messages(key), "budget": AGENT.budget()})
+
+
+@app.route("/api/agent/chat", methods=["POST"])
+def agent_chat():
+    data = request.get_json(silent=True) or {}
+    key = data.get("market", market.DEFAULT_MARKET)
+    if key not in market.MARKETS:
+        return jsonify({"error": "unbekannter Markt"}), 400
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "leere Frage"}), 400
+    snap = snapshot(key)
+    return jsonify({"message": AGENT.ask(key, text, snap)})
+
+
+@app.route("/api/agent/plan")
+def agent_plan():
+    key = _market_arg()
+    if not key:
+        return jsonify({"error": "unbekannter Markt"}), 400
+    plan = AGENT.get_plan(key)
+    if not plan or request.args.get("force") == "1":
+        plan = AGENT.plan(key, snapshot(key), force=True)
+    return jsonify(plan or {})
+
+
+@app.route("/")
+def index():
+    return send_from_directory(STATIC, "index.html")
+
+
+@app.route("/<path:path>")
+def static_files(path):
+    return send_from_directory(STATIC, path)
+
+
+def main():
+    port = int(os.environ.get("PORT", "8770"))
+    app.run(host="0.0.0.0", port=port, threaded=True)
+
+
+if __name__ == "__main__":
+    main()
