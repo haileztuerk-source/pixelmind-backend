@@ -586,6 +586,7 @@ async function load(){
     // der Chart im Lauf der Sitzung still hinter den Kurs zurueck - man
     // sieht ein Bild, das aussieht wie jetzt und eine Stunde alt ist.
     const nAlt = (S.data?.bars||[]).length;
+    const tAlt = nAlt ? S.data.bars[nAlt-1].t : 0;
     const amRand = S.vw ? (S.vw.i1 >= nAlt - 0.6) : true;
     S.data = d;
     // Versatz in den Preisraum des Brokers. Steht an genau dieser einen
@@ -596,6 +597,20 @@ async function load(){
     else if(amRand && S.vw){
       const zu = d.bars.length - nAlt;
       if(zu > 0){ S.vw.i0 += zu; S.vw.i1 += zu; clampView(); }
+    }
+    // Eine NEUE SITZUNG faengt von vorn an: aus 389 Balken werden um
+    // 15:30 wieder eine Handvoll. Der Ausschnitt stand dann bei Index
+    // 330 von 5 - hinter dem Ende der Reihe, und der Chart war leer.
+    //
+    // Erkannt wird sie am Kalendertag des juengsten Balkens, nicht an
+    // der blossen Anzahl: die schwankt auch mal, wenn eine kaputte
+    // Kerze herausfaellt, und dafuer soll der Ausschnitt nicht
+    // zurueckspringen.
+    const tNeu = d.bars.length ? d.bars[d.bars.length-1].t : 0;
+    const neueSitzung = tAlt && tNeu
+      && new Date(tAlt*1000).toDateString() !== new Date(tNeu*1000).toDateString();
+    if(neueSitzung || (S.vw && S.vw.i0 > d.bars.length - 1)){
+      fitView(); S.vs = null;
     }
     S.view0 = true;
     render();
@@ -1603,6 +1618,10 @@ function draw(){
   ctx.clearRect(0,0,W,H);
   const alle=S.data?.bars||[];
   if(!alle.length){ ladeBild(V); return; }
+  // Sind die juengsten Balken von heute? Entscheidet weiter unten ueber
+  // das Datum auf der Achse und hier oben ueber das Sitzungsschild.
+  const nichtHeuteOben =
+    new Date(alle[alle.length-1].t*1000).toDateString() !== new Date().toDateString();
   const topPad = PAD.t + (S.immersive ? 6 : CHROME*0.42);
   const pw=W-PAD.r, ph=H-PAD.b-topPad;
   // Grund mit leichtem Verlauf statt Flaeche - die Kerzen stehen dadurch
@@ -1908,6 +1927,44 @@ function draw(){
       ctx.fillText(px(S.data.spot), pw+5, yy+3);
     }
   }
+  // Ein Schild fuer die alte Sitzung.
+  //
+  // Die Statuszeile sagt zwar "BOERSE ZU", aber sie sagt nicht, WELCHEN
+  // Tag man vor sich hat - und ein Minutenchart sieht immer aus wie
+  // jetzt. Solange die letzten Balken nicht von heute sind, steht es
+  // deshalb im Bild: welcher Tag, und wann es weitergeht.
+  //
+  // Es erscheint nur dann. Waehrend der Sitzung waere es ein Schild, das
+  // etwas Selbstverstaendliches behauptet, und damit nur im Weg.
+  if(nichtHeuteOben && alle.length){
+    const letzte = new Date(alle[alle.length-1].t*1000);
+    const c = S.data.clock || {};
+    const auf = c.next_ts ? new Date(c.next_ts*1000) : null;
+    const txt = "Sitzung " + letzte.toLocaleDateString("de-DE",
+                  {weekday:"short", day:"2-digit", month:"2-digit"})
+      + (auf ? " · Börse öffnet " + auf.toLocaleDateString("de-DE",{weekday:"short"})
+               + " " + auf.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})
+             : "");
+    ctx.font = "600 10px "+V("--mono");
+    const bw3 = textW(ctx, txt) + 18, bx3 = Math.max(6, (pw - bw3)/2);
+    // UNTER die Chrome setzen, nicht an den Anfang der Zeichenflaeche.
+    //
+    // Der Chart laeuft absichtlich unter Kopfzeile und Marktleiste
+    // weiter - das ist der gewonnene Platz. Ein Schild dort oben liegt
+    // aber hinter den Marktkacheln und war damit genau das, was es nicht
+    // sein darf: unlesbar. Die Statuszeile steht bei chrome+6 und ist
+    // 18 hoch, also beginnt der freie Streifen bei chrome+28.
+    const by3 = (S.immersive ? topPad + 6 : CHROME + 28);
+    ctx.fillStyle = V("--panel-2"); ctx.globalAlpha = .93;
+    ctx.fillRect(bx3, by3, bw3, 18);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = V("--line"); ctx.lineWidth = 1;
+    ctx.strokeRect(snap(bx3)+half(), snap(by3)+half(), bw3, 18);
+    ctx.fillStyle = V("--ink-dim"); ctx.textAlign = "center";
+    ctx.fillText(txt, bx3 + bw3/2, by3 + 12.5);
+    ctx.textAlign = "left";
+  }
+
   if(S.cross!=null){
     const i=Math.max(0,Math.min(alle.length-1,Math.round(S.cross)));
     const b=alle[i], x=X(i);
@@ -1934,6 +1991,19 @@ function draw(){
   const spanD = bars.length > 1
     ? (bars[bars.length-1].t - bars[0].t) / 86400 : 0;
   const dOpt = {day:"2-digit", month:"2-digit"};
+  // Und das Datum IMMER dann, wenn die Balken nicht von heute sind.
+  //
+  // Die Spanne allein reichte nicht. Eine US-Sitzung dauert sechseinhalb
+  // Stunden, liegt also weit unter jeder Tagesschwelle - die Achse zeigte
+  // reine Uhrzeiten. Solange die Boerse zu ist, ist das aber die Sitzung
+  // von GESTERN, und "21:56" liest sich dann wie heute Abend. Um 13:13
+  // mittags stand damit eine Uhrzeit auf der Achse, die noch gar nicht
+  // stattgefunden hat.
+  //
+  // Gerechnet wird im Kalendertag des Telefons, nicht in UTC: es geht
+  // darum, was der Leser "heute" nennt. Der Wert steht schon oben, weil
+  // auch das Sitzungsschild ihn braucht.
+  const nichtHeute = nichtHeuteOben;
   // Ueber ein Jahr hinaus braucht es das Jahr. Auf der Tagesebene lief
   // die Achse ueber zwei Jahre und zeigte "10.09. · 12.03. · 10.09." -
   // zwei verschiedene Septembertage, nicht zu unterscheiden.
@@ -1952,7 +2022,7 @@ function draw(){
       ? d.toLocaleDateString("de-DE", yOpt)
       : (S.tf==="1d" || spanD > 10)
       ? d.toLocaleDateString("de-DE", dOpt)
-      : spanD > 1.2
+      : (spanD > 1.2 || nichtHeute)
         ? d.toLocaleDateString("de-DE", dOpt)+" "
           + d.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})
         : d.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"});
