@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
-from . import market, cboe, gex, zones, news, walls
+from . import market, cboe, gex, zones, news, walls, oanda
 from .agent import AGENT
 from .daybook import BOOK
 from . import keepalive, store
@@ -120,8 +120,12 @@ def _live_chart(key, conf_chain, interval):
         "ref": ref_p,
         "symbol": st.get("symbol"),
         "state": st,
-        "src": {"source": "bridge", "symbol": st.get("symbol") or "live",
-                "stale": False},
+        # Woher der Kurs kommt, steht jetzt im Feed - fest "bridge"
+        # hineinzuschreiben liesse einen OANDA-Kurs als eigenen Broker
+        # erscheinen, und das ist genau der Unterschied, den der Nutzer
+        # sehen muss.
+        "src": {"source": st.get("src") or "bridge",
+                "symbol": st.get("symbol") or "live", "stale": False},
     }
 
 
@@ -369,6 +373,10 @@ def _scan_loop():
 
 
 threading.Thread(target=_scan_loop, daemon=True).start()
+# Live-Kurse ueber den Server, falls ein OANDA-Schluessel gesetzt ist.
+# Ohne Schluessel passiert hier nichts - die Bruecke und die verzoegerte
+# Quelle bleiben unberuehrt.
+oanda.start(_active_markets)
 keepalive.start()
 
 
@@ -376,6 +384,7 @@ keepalive.start()
 @app.route("/health")
 def health():
     return jsonify({"ok": True, "active": _active_markets(),
+                    "oanda": oanda.status(),
                     "budget": AGENT.budget(),
                     "keepalive": keepalive.status(),
                     "store": store.health()})
@@ -516,6 +525,9 @@ def live_state():
         return jsonify({"error": "unbekannter Markt"}), 400
     st = FEED.state(key)
     st["configured"] = bool(live_token())
+    # Der zweite Weg gehoert mit in die Auskunft: ist gar nichts live,
+    # soll erkennbar sein, ob beide Wege fehlen oder nur einer.
+    st["oanda"] = oanda.status()
     return jsonify(st)
 
 

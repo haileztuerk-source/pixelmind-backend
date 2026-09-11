@@ -31,6 +31,15 @@ services:
       # Denselben Wert traegt bridge/mt5_bridge.py auf dem PC.
       - key: LIVE_TOKEN
         sync: false
+      # Zweiter Weg zu Live-Kursen, ohne dass ein PC laufen muss: ein
+      # kostenloses OANDA-Uebungskonto. Der Server holt den Kurs selbst.
+      # Das ist OANDAs CFD, nicht der des eigenen Brokers - die Bruecke
+      # behaelt deshalb immer Vorrang. Ohne Schluessel bleibt der Abruf
+      # aus und nichts aendert sich.
+      - key: OANDA_TOKEN
+        sync: false
+      - key: OANDA_ENV
+        value: "practice"   # practice = Uebungskonto, live = echtes Konto
       - key: SCAN_INTERVAL
         value: "20"
       - key: AGENT_DAY_BUDGET

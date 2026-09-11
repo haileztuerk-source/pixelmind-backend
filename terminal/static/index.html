@@ -2360,7 +2360,9 @@ function render(){
   if(lv){
     lv.className = "livedot " + (lage.k==="live" ? "on" : lage.k==="zu" ? "shut" : "off");
     lv.title = lage.k==="live"
-      ? `Live aus ${esc(d.live.symbol||"der Brücke")} · Tick vor ${Math.round(d.live.tick_age||0)} s`
+      ? `Live aus ${esc(d.live.symbol||"der Brücke")}`
+        + (d.live.src==="oanda" ? " (OANDA, nicht dein Broker)" : " (deine Brücke)")
+        + ` · Tick vor ${Math.round(d.live.tick_age||0)} s`
       : lage.t + (d.live?.reason ? " — "+esc(d.live.reason) : "");
   }
   tickTo($("spot"), d.spot);
@@ -2409,7 +2411,13 @@ function render(){
 function kursLage(d){
   const c = d.clock || {};
   const alt = d.bar_age;
-  if(d.live?.live) return {k:"live", t:"LIVE"};
+  if(d.live?.live){
+    // Welcher Weg traegt gerade. Der eigene Broker und ein fremder CFD
+    // sind beide live, aber nicht dasselbe: der eine ist der Kurs, zu
+    // dem gehandelt wird, der andere eine sehr nahe Naeherung. Wer das
+    // nicht unterscheiden kann, haelt eine Naeherung fuer seinen Kurs.
+    return {k:"live", t: d.live.src === "oanda" ? "LIVE · OANDA" : "LIVE"};
+  }
   if(c.open === false){
     const bis = c.next_ts ? new Date(c.next_ts*1000) : null;
     const std = bis ? (c.next_ts*1000 - Date.now())/3600000 : null;
@@ -2893,8 +2901,14 @@ $("idbtn").onclick=()=>{
     // eine Eigenschaft der App statt wie ein fehlender Schritt.
     +`<div class="sh-t" style="padding-top:14px">Live-Kurse</div>`
     +`<div class="sh-n">${S.data?.live?.live
-      ? `Läuft: der Chart kommt gerade aus <b>${esc(S.data.live.symbol||"der Brücke")}</b>,
-         letzter Tick vor ${Math.round(S.data.live.tick_age||0)} Sekunden.`
+      ? `Läuft: der Chart kommt gerade aus <b>${esc(S.data.live.symbol||"der Brücke")}</b>
+         ${S.data.live.src==="oanda"
+            ? `— das ist <b>OANDAs</b> CFD über den Server, nicht der deines Brokers.
+               Der Unterschied ist Spread und Finanzierung, ein paar Punkte, und der
+               gemessene Versatz gleicht ihn aus. Für deinen Kurs auf den Punkt:
+               <b>START-BRUECKE.bat</b> starten, die hat Vorrang.`
+            : `— dein eigener Broker über die Brücke.`}
+         Letzter Tick vor ${Math.round(S.data.live.tick_age||0)} Sekunden.`
       : `Der Chart hängt gerade an der öffentlichen Cboe-Quelle, und die ist
          <b>15 Minuten verzögert</b> — gemessen, nicht geschätzt: auch der
          Cboe-Kurs selbst läuft den Kerzen nicht voraus. Eine kostenlose
@@ -2903,7 +2917,11 @@ $("idbtn").onclick=()=>{
          aus MetaTrader 5 auf deinem PC:
          <b>bridge/START-BRUECKE.bat</b> doppelklicken, MT5 offen lassen —
          dann steht hier LIVE und der Punkt oben wird grün.
-         <br><br>Der Server ist dafür schon eingerichtet und wartet.`}</div>`);
+         <br><br>Ohne PC geht es auch: ein kostenloses OANDA-Übungskonto, den
+         Zugangsschlüssel als <b>OANDA_TOKEN</b> bei Render eintragen — dann holt
+         der Server den Kurs selbst. Das ist dann OANDAs CFD, nicht deiner; die
+         Brücke behält immer Vorrang.
+         <br><br>Der Server ist für beides eingerichtet und wartet.`}</div>`);
   $("spOpen").onclick = () => spaceSheet();
   $("sheetBody").querySelectorAll("[data-m]").forEach(el=>el.onclick=()=>switchMarket(el.dataset.m));
 };

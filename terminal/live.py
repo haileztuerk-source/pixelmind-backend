@@ -69,10 +69,16 @@ class Feed:
         return self._m.setdefault(market, {
             "bars": [], "tick": None, "symbol": None,
             "at_bars": 0.0, "at_tick": 0.0,
+            # Woher der Kurs kommt: "bridge" (eigener Broker, ueber den
+            # PC) oder "oanda" (fremder CFD, ueber den Server). Der
+            # Unterschied ist keine Feinheit - der eine ist der Kurs, zu
+            # dem man handelt, der andere eine sehr nahe Naeherung. Die
+            # Kopfzeile sagt deshalb, welcher gerade traegt.
+            "src": None,
         })
 
     # ------------------------------------------------------------ schreiben
-    def put_bars(self, market, symbol, bars):
+    def put_bars(self, market, symbol, bars, src="bridge"):
         """Nimmt Minutenkerzen der Bruecke entgegen.
 
         Wird zusammengefuehrt statt ersetzt: die Bruecke schickt in der
@@ -100,10 +106,11 @@ class Feed:
             merged.update({b["t"]: b for b in clean})
             s["bars"] = sorted(merged.values(), key=lambda b: b["t"])[-MAX_BARS:]
             s["symbol"] = symbol or s["symbol"]
+            s["src"] = src
             s["at_bars"] = time.time()
             return len(s["bars"])
 
-    def put_tick(self, market, symbol, price, ts=None):
+    def put_tick(self, market, symbol, price, ts=None, src="bridge"):
         """Nimmt den letzten Kurs entgegen und formt die laufende Kerze."""
         try:
             price = float(price)
@@ -118,6 +125,7 @@ class Feed:
             s = self._slot(market)
             s["tick"] = {"p": price, "t": ts}
             s["symbol"] = symbol or s["symbol"]
+            s["src"] = src
             s["at_tick"] = now
 
             # Die laufende Minute mitfuehren, damit der Chart zwischen
@@ -148,14 +156,16 @@ class Feed:
             live = age_t is not None and age_t < STALE_TICK
             return {
                 "live": live,
+                "src": s.get("src"),
                 "symbol": s["symbol"],
                 "price": (s["tick"] or {}).get("p"),
                 "tick_age": age_t,
                 "bars_age": age_b,
                 "bars_n": len(s["bars"]),
                 "reason": None if live else (
-                    "Bruecke seit %.0f s still" % age_t if age_t is not None
-                    else "noch kein Tick"),
+                    "%s seit %.0f s still" % (
+                        "OANDA" if s.get("src") == "oanda" else "Bruecke", age_t)
+                    if age_t is not None else "noch kein Tick"),
             }
 
     def bars(self, market):

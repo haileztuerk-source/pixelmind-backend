@@ -89,3 +89,30 @@ kürzt sich der Versatz heraus.
 Fällt die Brücke aus, bleibt der zuletzt gemessene Versatz stehen. Sonst
 sprängen alle Zahlen um mehrere zehn Punkte, ohne dass sich der Markt
 bewegt hätte.
+
+## Ohne PC: OANDA statt Brücke
+
+Die Brücke liefert deinen eigenen Kurs, braucht dafür aber einen
+laufenden Rechner. Wer das nicht will, kann den Server den Kurs selbst
+holen lassen — über ein kostenloses **OANDA-Übungskonto**:
+
+1. Bei OANDA ein Practice-Konto anlegen.
+2. Dort unter *Manage API Access* einen Zugangsschlüssel erzeugen.
+3. Bei Render unter *Environment* eintragen:
+
+```
+OANDA_TOKEN = der-schluessel
+```
+
+Mehr nicht — die Kontonummer sucht der Server selbst. Danach steht in
+der Kopfzeile **LIVE · OANDA**.
+
+**Der Unterschied, offen gesagt:** das ist OANDAs CFD, nicht der deines
+Brokers. Zwei CFDs auf denselben Index trennt Spread und Finanzierung —
+ein paar Punkte, über Stunden nahezu konstant. Der gemessene Versatz im
+Preisraum gleicht das aus, gemessen wurde er in einem Test auf 0,01
+Punkte genau. Für den Kurs, zu dem du wirklich handelst, bleibt die
+Brücke die richtige Wahl.
+
+**Rangfolge:** Brücke → OANDA → Cboe verzögert. Läuft die Brücke, rührt
+OANDA den Chart nicht an. Die Kopfzeile sagt immer, was gerade trägt.
