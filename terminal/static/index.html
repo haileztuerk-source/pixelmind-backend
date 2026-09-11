@@ -1940,12 +1940,28 @@ function draw(){
     const letzte = new Date(alle[alle.length-1].t*1000);
     const c = S.data.clock || {};
     const auf = c.next_ts ? new Date(c.next_ts*1000) : null;
-    const txt = "Sitzung " + letzte.toLocaleDateString("de-DE",
-                  {weekday:"short", day:"2-digit", month:"2-digit"})
-      + (auf ? " · Börse öffnet " + auf.toLocaleDateString("de-DE",{weekday:"short"})
-               + " " + auf.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})
-             : "");
+    // Was next_ts bedeutet, haengt davon ab, ob die Boerse offen ist:
+    // dann ist es der Schluss, sonst die naechste Eroeffnung. Blind
+    // "oeffnet" davorzuschreiben behauptete um 15:30, die Boerse oeffne
+    // um 22 Uhr - das ist der Handelsschluss.
+    const zeit = auf ? auf.toLocaleDateString("de-DE",{weekday:"short"})
+                       + " " + auf.toLocaleTimeString("de-DE",
+                         {hour:"2-digit",minute:"2-digit"}) : "";
+    const kopf = "Sitzung " + letzte.toLocaleDateString("de-DE",
+                   {weekday:"short", day:"2-digit", month:"2-digit"});
+    // Der Nachsatz in zwei Laengen. Das Schild ist mittig und darf nicht
+    // ueber die Zeichenflaeche hinauslaufen - auf einem 412 Punkte
+    // breiten Telefon schnitt der lange Text rechts ab und endete mit
+    // "verzoeger". Passt der lange nicht, kommt der kurze; passt auch
+    // der nicht, bleibt der Tag allein - der ist die eigentliche
+    // Aussage, alles andere steht ohnehin in der Statuszeile.
     ctx.font = "600 10px "+V("--mono");
+    const lang = !auf ? "" : c.open ? " · Börse offen, Kerzen folgen verzögert"
+                                    : " · Börse öffnet " + zeit;
+    const kurz = !auf ? "" : c.open ? " · Kerzen folgen" : " · öffnet " + zeit;
+    const passt = t => textW(ctx, t) + 18 <= pw - 12;
+    const txt = passt(kopf + lang) ? kopf + lang
+              : passt(kopf + kurz) ? kopf + kurz : kopf;
     const bw3 = textW(ctx, txt) + 18, bx3 = Math.max(6, (pw - bw3)/2);
     // UNTER die Chrome setzen, nicht an den Anfang der Zeichenflaeche.
     //
@@ -1982,6 +1998,12 @@ function draw(){
 
   ctx.fillStyle=V("--ink-faint"); ctx.font="9px "+V("--mono");
   const st=Math.max(1,Math.round(sp/4));
+  // Die zuletzt beschriftete Stelle, damit sich zwei Marken nicht
+  // ueberschreiben. Mit Datum sind die Beschriftungen fast doppelt so
+  // breit wie vorher, und am linken Rand wurde eine davon in den
+  // Ausschnitt hineingeklemmt - zwei Texte an derselben Stelle,
+  // "10.0910.09. 21:51", und keiner mehr lesbar.
+  let letztesX = -1e9;
   // Beschriftung nach der tatsaechlichen Spanne, nicht nach dem Namen der
   // Zeitebene. Vorher entschied allein S.tf==="1d" ueber Datum oder
   // Uhrzeit - bei 573 Viertelstundenkerzen ueber sechs Tage stand damit
@@ -2026,8 +2048,15 @@ function draw(){
         ? d.toLocaleDateString("de-DE", dOpt)+" "
           + d.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})
         : d.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"});
+    const lw = textW(ctx, lab);
     let x=X(i); ctx.textAlign="center";
-    if(x<24){x=2;ctx.textAlign="left";} else if(x>pw-24){x=pw-2;ctx.textAlign="right";}
+    // Nicht mehr in den Ausschnitt hineinklemmen. Eine Marke, die aus
+    // dem Bild laeuft, gehoert weggelassen - hineingeschoben steht sie
+    // ueber dem falschen Balken und behauptet eine Zeit, die dort nicht
+    // gilt.
+    if(x - lw/2 < 1 || x + lw/2 > pw - 1) continue;
+    if(x - lw/2 < letztesX + 8) continue;
+    letztesX = x + lw/2;
     ctx.fillText(lab, x, H-PAD.b+13);
   }
   ctx.textAlign="left";
@@ -2315,9 +2344,27 @@ function kursLage(d){
         +" "+bis.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"});
     return {k:"zu", t:"BÖRSE ZU"+wann};
   }
-  if(c.open === true && alt != null && alt > 1800)
-    return {k:"zu", t:"keine frischen Kurse seit "+Math.round(alt/60)+" min"};
-  return {k:"delay", t:(d.delayed_minutes||15)+" min verzögert"};
+  // Fehlende frische Balken sind kurz nach der Eroeffnung KEIN Befund.
+  //
+  // Cboe liefert mit einer Viertelstunde Abstand, also gibt es um Punkt
+  // 15:30 zwangslaeufig noch keinen Balken von heute - der juengste ist
+  // der von gestern Abend. Gemeldet wurde daraufhin "keine frischen
+  // Kurse seit 1065 min", und das las sich wie ein Ausfall, waehrend
+  // alles seinen Gang ging.
+  //
+  // Gemessen wird deshalb gegen die Zeit SEIT der Eroeffnung, nicht
+  // gegen das Alter des Balkens. Erst wenn die Sitzung laenger laeuft
+  // als Verzoegerung plus zehn Minuten Luft und trotzdem nichts kommt,
+  // ist es einer - dann meist ein Feiertag, den der Kalender nicht kennt.
+  const vz = (d.delayed_minutes || c.delay_min || 15);
+  const seit = c.since_open;
+  if(c.open === true){
+    if(seit != null && seit < (vz + 10) * 60 && alt != null && alt > 1800)
+      return {k:"delay", t:"Börse offen · erste Kurse "+vz+" min verzögert"};
+    if(alt != null && alt > (vz + 25) * 60)
+      return {k:"zu", t:"keine frischen Kurse seit "+Math.round(alt/60)+" min"};
+  }
+  return {k:"delay", t:vz+" min verzögert"};
 }
 
 function renderTf(){

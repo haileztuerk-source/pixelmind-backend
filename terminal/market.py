@@ -409,10 +409,30 @@ def us_session(now=None):
             grenze += timedelta(days=1)
             while grenze.weekday() >= 5:
                 grenze += timedelta(days=1)
+    # Wie lange laeuft die Sitzung schon? Das entscheidet, ob fehlende
+    # frische Balken ein Befund sind oder der Normalfall.
+    #
+    # Cboe liefert mit einer Viertelstunde Abstand. In den ersten
+    # Minuten nach der Eroeffnung gibt es deshalb ZWANGSLAEUFIG noch
+    # keinen Balken von heute - das ist die Verzoegerung, kein Ausfall.
+    # Ohne diesen Wert meldete die Oberflaeche um Punkt 15:30 "keine
+    # frischen Kurse seit 1065 min" und sah aus wie ein Fehler,
+    # waehrend alles seinen Gang ging.
+    seit = None
+    if offen:
+        auf_heute = et.replace(hour=9, minute=30, second=0, microsecond=0)
+        seit = int((et - auf_heute).total_seconds())
     return {
         "open": offen,
         "et": et.strftime("%H:%M"),
         "next_ts": int(grenze.timestamp()),
+        # Was next_ts BEDEUTET. Bei offener Boerse ist es der Schluss,
+        # bei geschlossener die naechste Eroeffnung. Die Oberflaeche
+        # schrieb blind "oeffnet" davor und behauptete damit um 15:30,
+        # die Boerse oeffne um 22 Uhr - das ist der Handelsschluss.
+        "next_is": "close" if offen else "open",
+        "since_open": seit,
+        "delay_min": 15,
         "opens_at": "15:30",                      # nur zur Anzeige, ET 9:30
     }
 
